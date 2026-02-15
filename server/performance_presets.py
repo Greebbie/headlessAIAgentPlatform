@@ -1,0 +1,43 @@
+"""Performance preset definitions for fast/balanced/accurate modes."""
+
+PRESETS = {
+    "fast": {
+        "name": "快速模式",
+        "description": "低延迟，适合实时对话",
+        "retrieval_top_k": 3,
+        "retrieval_timeout_ms": 5000,
+        "llm_temperature": 0.2,
+        "llm_max_tokens": 512,
+        "llm_timeout_ms": 30000,
+        "tool_timeout_ms": 10000,
+        "tool_max_retries": 1,
+        "keyword_weight": 0.3,
+        "reranker_enabled": False,
+    },
+    "balanced": {
+        "name": "均衡模式",
+        "description": "兼顾速度与质量",
+        "retrieval_top_k": 5,
+        "retrieval_timeout_ms": 10000,
+        "llm_temperature": 0.3,
+        "llm_max_tokens": 2048,
+        "llm_timeout_ms": 60000,
+        "tool_timeout_ms": 30000,
+        "tool_max_retries": 2,
+        "keyword_weight": 0.5,
+        "reranker_enabled": False,
+    },
+    "accurate": {
+        "name": "精准模式",
+        "description": "高质量回答，延迟较高",
+        "retrieval_top_k": 10,
+        "retrieval_timeout_ms": 20000,
+        "llm_temperature": 0.1,
+        "llm_max_tokens": 4096,
+        "llm_timeout_ms": 120000,
+        "tool_timeout_ms": 60000,
+        "tool_max_retries": 3,
+        "keyword_weight": 0.7,
+        "reranker_enabled": True,
+    },
+}

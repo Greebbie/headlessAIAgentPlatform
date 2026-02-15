@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vite build)",
+      "Bash(where:*)",
+      "Bash(tasklist:*)",
+      "Bash(NO_PROXY=localhost,127.0.0.1 curl:*)",
+      "Bash(npx playwright install:*)",
+      "Bash(npx playwright test:*)",
+      "Bash(node test_e2e.js:*)",
+      "Bash(wc:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(wmic OS get:*)",
+      "Bash(powershell.exe -Command \"\\(Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum\\).Sum / 1GB\")",
+      "Bash(wsl --list:*)",
+      "Bash(wsl:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

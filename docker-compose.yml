@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  server:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - HLAB_DATABASE_URL=sqlite+aiosqlite:///./data/hlab.db
+      - HLAB_REDIS_URL=redis://redis:6379/0
+      - HLAB_LLM_BASE_URL=http://ollama:11434/v1
+    volumes:
+      - hlab-data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # ── Local LLM via Ollama (CPU) ────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+
+  # ── Optional: vLLM for GPU inference ──────────────
+  # Uncomment below and comment out ollama if you have NVIDIA GPU
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   ports:
+  #     - "8001:8000"
+  #   environment:
+  #     - MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   volumes:
+  #     - vllm-cache:/root/.cache/huggingface
+  #   restart: unless-stopped
+
+  # ── Optional: PostgreSQL for production ───────────
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_DB: hlab
+  #     POSTGRES_USER: hlab
+  #     POSTGRES_PASSWORD: hlab_pass
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  hlab-data:
+  ollama-models:
+  # pgdata:
+  # vllm-cache:
