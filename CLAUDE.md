@@ -22,10 +22,12 @@
 
 **Production-grade AI Agent platform** for enterprise/private deployment:
 - Multi Agent management with independent config and knowledge domain isolation
-- **LLM-driven intent routing**: Hybrid fast-path + LLM classification (greeting/chitchat/knowledge_query/workflow_start/tool_use)
-- **Multi-workflow support**: One agent can bind multiple workflows, LLM auto-routes to correct one
+- **Conversation-first architecture**: LLM drives the conversation naturally; skills are exposed as function-calling tools. No explicit router/classifier layer — the LLM decides when to call tools (knowledge search, HTTP tools, workflows, delegation) based on context.
+- **Capabilities API**: Auto-manage skills from Agent page — users configure knowledge/workflows/tools directly, system creates Skills behind the scenes (`managed_by = "agent:{id}"`)
+- **Multi-Agent collaboration**: Agent delegation via `delegate` skills with depth/cycle protection
+- **Multi-workflow support**: One agent can bind multiple workflows, LLM auto-selects via function calling
 - Workflow orchestration with sequential steps, field validation, tool calling, **file upload**, **LLM-assisted validation**, **interruptible workflows**
-- RAG knowledge base with dual-channel retrieval (KV + Vector) + keyword search + document upload
+- RAG knowledge base with three-channel retrieval (KV + Vector + BM25) + RRF fusion + optional cross-encoder reranking + PDF/DOCX/TXT upload
 - HTTP tool integration with exponential backoff retry
 - Full audit trail with call chain replay
 - Web console with React + Ant Design
@@ -37,9 +39,13 @@
 ```
 HlAB-headlessagentbuilder/
 ├── server/                       # FastAPI backend
-│   ├── api/                      # 57 API endpoints (all implemented)
+│   ├── api/                      # 70+ API endpoints (all implemented)
 │   │   ├── invoke.py             # Core invoke + SSE streaming
 │   │   ├── agents.py             # Agent CRUD
+│   │   ├── skills.py             # Skill CRUD
+│   │   ├── agent_skills.py       # Agent-Skill binding
+│   │   ├── agent_capabilities.py # Auto-manage skills via capabilities API
+│   │   ├── agent_connections.py  # Inter-agent connections
 │   │   ├── workflows.py          # Workflow management
 │   │   ├── knowledge.py          # Knowledge base + document upload
 │   │   ├── tools.py              # Tool management
@@ -50,7 +56,7 @@ HlAB-headlessagentbuilder/
 │   │   ├── mock_tools.py         # Dev-only mock tool endpoints
 │   │   └── auth.py               # API key authentication
 │   ├── engine/                   # Core engine
-│   │   ├── agent_runtime.py      # Agent execution logic
+│   │   ├── agent_runtime.py      # Agent execution: conversational pipeline + skill-tools
 │   │   ├── workflow_executor.py  # Workflow executor + recursion guard
 │   │   ├── knowledge_retriever.py # Hybrid retrieval: Exact + Vector + Keyword + RRF fusion
 │   │   ├── llm_adapter.py        # LLM adapter (OpenAI/DashScope/ZhipuAI/Ollama)
@@ -65,7 +71,8 @@ HlAB-headlessagentbuilder/
 │       ├── pages/                # 10 management pages
 │       │   ├── DashboardPage.tsx  # Dashboard with metrics
 │       │   ├── PlaygroundPage.tsx  # Agent chat test + call trace + perf config
-│       │   ├── AgentsPage.tsx     # Agent CRUD + LLM/tool/knowledge binding
+│       │   ├── AgentsPage.tsx     # Agent CRUD + skill binding + agent connections
+│       │   ├── SkillsPage.tsx     # Skill CRUD + dynamic type-based config
 │       │   ├── WorkflowsPage.tsx  # Workflow + step management
 │       │   ├── KnowledgePage.tsx   # Knowledge sources + RAG config panel
 │       │   ├── ToolsPage.tsx      # Tool CRUD + connectivity test
@@ -118,14 +125,17 @@ open http://localhost:8000
 
 | Module | Status | Details |
 |--------|--------|---------|
-| Backend API | 57 endpoints | Including SSE streaming, performance config, vector admin |
-| Database | 10 tables | Full ORM with async SQLAlchemy |
-| RAG | Hybrid 3-channel + RRF | Exact KV (<50ms), Vector semantic (<200ms), BM25-style keyword, RRF fusion |
+| Backend API | 70+ endpoints | Including SSE streaming, performance config, vector admin, skills, agent connections |
+| Database | 13 tables | Full ORM with async SQLAlchemy (added skills, agent_skills, agent_connections) |
+| Skill Architecture | Complete | Conversation-first: skills exposed as function-calling tools; LLM decides when to invoke |
+| Multi-Agent | Complete | Agent delegation with depth (max 3) and cycle protection |
+| RAG | Hybrid 3-channel + RRF | Exact KV (<50ms), Vector HNSW (<200ms), jieba BM25 keyword, RRF fusion (k=60), optional cross-encoder reranker |
 | Workflow Engine | Complete | Executor + validator + recursion guard + conditional branching + cancel/exit + file upload + LLM validation |
-| Intent Routing | Complete | Hybrid fast-path + LLM classification, multi-workflow support, chitchat handling |
+| Conversational Pipeline | Complete | LLM-driven with pre-retrieval + function calling; no explicit intent router |
 | Tool Calling | Complete | HTTP tools + exponential backoff + LLM native function calling |
 | Audit Logs | Complete | Full call chain with 7-step traces |
-| Frontend Console | 10 pages | Dashboard, Playground, Agents, Workflows, Knowledge, Tools, LLM Configs, Settings, Audit, Lock |
+| Capabilities API | Complete | Auto-manage skills from Agent page; GET/PUT /agents/{id}/capabilities; cascade delete |
+| Frontend Console | 11 pages | Dashboard, Playground, Agents (tabbed capabilities), Skills (filtered), Workflows, Knowledge (chunk viewer), Tools, LLM Configs, Settings, Audit, Lock |
 | RAG Config UI | Complete | Inline presets, embedding model selector, HNSW params, reranker, intent detection |
 | Deployment | Complete | One-click deploy script |
 | SSE Streaming | Complete | POST /invoke/stream endpoint |
@@ -140,18 +150,20 @@ open http://localhost:8000
 | `server/main.py` | FastAPI entry + CORS + router registration |
 | `server/config.py` | Environment variable config |
 | `server/api/invoke.py` | Core invoke API (POST /invoke + POST /invoke/stream SSE) |
-| `server/engine/agent_runtime.py` | Agent execution + LLM function calling loop |
-| `server/engine/knowledge_retriever.py` | RAG dual-channel retrieval + keyword n-gram search |
+| `server/engine/agent_runtime.py` | Agent execution: conversation-first pipeline, `_build_skill_tools()` converts skills to function defs, multi-round function calling loop |
+| `server/engine/knowledge_retriever.py` | RAG three-channel retrieval (fast KV + vector + BM25) + RRF fusion + cross-encoder reranker |
 | `server/engine/llm_adapter.py` | LLM adapter + function calling (chat_with_tools) |
-| `server/engine/vector_store.py` | FAISS vector store + health status endpoint |
+| `server/api/agent_capabilities.py` | GET/PUT capabilities API (auto-manages skills) |
+| `server/engine/vector_store.py` | FAISS IndexHNSWFlat vector store + bge-m3 embedding with instruction prefix + cascade fallback |
 | `server/performance_presets.py` | fast/balanced/accurate preset definitions |
 
 ### Frontend
 | File | Purpose |
 |------|---------|
 | `console/src/App.tsx` | Route config (no raw axios - uses page components) |
-| `console/src/api.ts` | Centralized API client (agents, workflows, knowledge, tools, audit, invoke, llmConfig, performance, vectorAdmin) |
-| `console/src/pages/AgentsPage.tsx` | Agent CRUD + LLM/tool/knowledge binding + function calling config |
+| `console/src/api.ts` | Centralized API client (agents, agentCapabilities, skills, agentSkills, agentConnections, workflows, knowledge, tools, audit, invoke, llmConfig, performance, vectorAdmin) |
+| `console/src/pages/AgentsPage.tsx` | Agent CRUD + tabbed modal (Basic Info / Capabilities / Advanced) + auto-managed skills |
+| `console/src/pages/SkillsPage.tsx` | Skill CRUD + dynamic type-based config forms |
 | `console/src/pages/PlaygroundPage.tsx` | Agent chat + SSE streaming + function calling chain trace |
 | `console/src/pages/KnowledgePage.tsx` | Knowledge management + RAG config panel (presets, embedding, HNSW, reranker) |
 | `console/src/pages/LLMConfigsPage.tsx` | LLM config CRUD + provider templates (uses llmConfigApi) |
@@ -178,6 +190,12 @@ POST /api/v1/invoke/stream
 ```bash
 POST /api/v1/knowledge/upload
 FormData: {file, source_id, domain, chunk_size, embedding_model, reranker_enabled}
+```
+
+### Agent Capabilities (auto-manage skills)
+```bash
+GET  /api/v1/agents/{agent_id}/capabilities     # Get knowledge/workflow/tool capabilities
+PUT  /api/v1/agents/{agent_id}/capabilities     # Upsert capabilities (auto-creates/updates/deletes skills)
 ```
 
 ### Performance Config
@@ -265,6 +283,37 @@ POST /api/v1/performance/update-config      # Update custom config (immediate ef
 - Workflow: no semantic validation → `llm_validate` + `llm_validate_prompt` for LLM-assisted field validation
 - Agent runtime: no chitchat handling → `_handle_chitchat()` for casual conversation without retrieval
 - AgentsPage: single workflow dropdown → multi-workflow Select with per-workflow description inputs
+- AgentsPage: dual-system confusion (legacy scope fields + skill routing coexist) → skill-only UI; Agent page shows basic info + skill binding + connections; legacy scope fields removed from UI (API still accepts them for backward compatibility)
+- Agent model/schema: `skill_routing_mode` default → "conversational"; conversation-first pipeline replaces SkillRouter/SkillExecutor; skills exposed as function-calling tools
+- KnowledgePage: no way to view chunks/entries in a knowledge source → chunk viewer modal with clickable source name + View button
+- AgentsPage: required 5+ steps across 3 pages to configure agent → single-page tabbed modal (Basic Info / Capabilities / Advanced) with auto-managed skills
+- SkillsPage: auto-managed skills cluttered the list → filtered out with `managed_by=null` query param + info banner
+- Agent delete: orphaned auto-managed skills left behind → cascade delete of managed skills + AgentSkill bindings
+- Dead code: `skill_router.py` (362 lines) + `skill_executor.py` (300 lines) → deleted (zero references project-wide)
+- Agent model: deprecated fields `workflow_id`, `workflow_scope`, `knowledge_scope`, `tool_scope` → removed from model, schemas, and API
+- Agent runtime: `get_vector_store` imported inside closures → moved to module-level import
+- Agent runtime: duplicate retrieval (pre-retrieval + LLM tool call) → knowledge tool description annotated when pre-retrieval succeeded
+- AgentsPage: single-option routing mode dropdown → removed (hardcoded "conversational")
+- AgentsPage: Knowledge QA redundant domain selector → removed; auto-inferred from selected sources
+- AgentsPage: Description fields too small → TextArea with full-width layout
+- SkillsPage: trigger_config UI (unused in conversational mode) → removed entirely
+- SkillsPage: Chinese labels inconsistent with English AgentsPage → all labels converted to English
+- PlaygroundPage: trace panel fixed 380px → 340px responsive with auto-hide below 900px
+- PlaygroundPage: missing event colors for conversational mode → added conversational_init, pre_retrieval, query_rewrite
+- RAG keyword search: SQL LIKE + hardcoded score=0.5 → jieba tokenization + real BM25 scoring (k1=1.5, b=0.75, IDF+TF normalization)
+- RAG fusion: simple sort by score → Reciprocal Rank Fusion (k=60, weighted vector=1.0/keyword=configurable)
+- RAG channels: sequential execution → concurrent asyncio.gather with return_exceptions
+- RAG reranker: config existed but never wired → cross-encoder Reranker class (bge-reranker-v2-m3) activated by reranker_enabled
+- FAISS index: IndexFlatIP brute force → IndexHNSWFlat (M=32, efConstruction=200, configurable efSearch)
+- Embedding: bge-small-zh-v1.5 default → bge-m3 (1024-dim) with instruction prefix for queries
+- Embedding cascade: 3 models → 4 models (bge-m3 → bge-small-zh → MiniLM-L6 → multilingual-MiniLM)
+- Vector store: no dimension mismatch detection → auto-detect + create fresh HNSW index + log rebuild prompt
+- runtime_config: singleton existed but engine never read it → wired into retriever (keyword_weight, ef_search, reranker_enabled, retrieval_timeout_ms, retrieval_top_k)
+- Performance presets: missing ef_search → added per-preset ef_search (fast=64, balanced=128, accurate=256)
+- main.py lifespan: no default preset → initialize balanced preset + jieba.initialize() on startup
+- Document upload: only .txt/.md → added .pdf (pypdf) and .docx (python-docx) support
+- Chunking: simple paragraph split → recursive splitting (paragraph → line → sentence → character) with jieba sentence boundary detection
+- Retrieval timeout: no timeout → configurable asyncio.wait_for wrapping entire retrieve() pipeline
 
 ### Known Limitations
 - API Key stored as plaintext in DB (production: encrypt)
@@ -296,13 +345,16 @@ HLAB_VECTOR_STORE=faiss|milvus
 
 | Table | Purpose | Key Fields |
 |-------|---------|-----------|
-| agents | Agent config | id, name, system_prompt, knowledge_scope, tool_scope, workflow_scope, llm_config_id |
+| agents | Agent config | id, name, system_prompt, skill_routing_mode (default "conversational"), response_config, risk_config |
+| skills | Skill definitions | id, name, skill_type, trigger_config, execution_config, priority, managed_by |
+| agent_skills | Agent-Skill bindings | agent_id, skill_id, priority_override, config_override |
+| agent_connections | Inter-agent connections | source_agent_id, target_agent_id, connection_type, shared_context |
 | workflows | Workflow definitions | id, name, mode, version |
 | workflow_steps | Workflow steps | workflow_id, step_type, tool_id, on_failure |
 | knowledge_sources | Knowledge sources | id, domain, source_type, embedding_model |
 | knowledge_chunks | Knowledge chunks | source_id, content, entity_key, domain |
 | tool_definitions | Tool definitions | id, name, endpoint_url, method |
-| conversation_sessions | Chat sessions | id, agent_id, tenant_id |
+| conversation_sessions | Chat sessions | id, agent_id, tenant_id, active_skill_id, delegation_chain |
 | messages | Message records | session_id, role, content |
 | audit_traces | Audit traces | trace_id, session_id, event_type, event_data |
 | llm_configs | LLM configurations | id, name, provider, base_url, model, is_default |
@@ -311,15 +363,20 @@ HLAB_VECTOR_STORE=faiss|milvus
 
 ## Future Optimization
 
-1. ~~Hybrid BM25 + Vector retrieval (RRF fusion)~~ ✅ Implemented
-2. Query Expansion / HyDE query enhancement
-3. Unit test coverage
-4. Prometheus monitoring integration
-5. SPLADE learned sparse retrieval (upgrade from BM25-style)
-6. ColBERT-style late interaction for precision-critical domains
+1. ~~Hybrid BM25 + Vector retrieval (RRF fusion)~~ ✅ Implemented (jieba BM25 + HNSW vector + RRF k=60)
+2. ~~Cross-encoder reranking~~ ✅ Implemented (bge-reranker-v2-m3, activated in accurate preset)
+3. ~~HNSW vector index~~ ✅ Implemented (IndexHNSWFlat M=32, efConstruction=200, configurable efSearch)
+4. ~~PDF/DOCX document upload~~ ✅ Implemented (pypdf + python-docx)
+5. ~~Recursive text chunking~~ ✅ Implemented (paragraph → line → sentence with jieba boundaries)
+6. ~~Runtime config wiring~~ ✅ Implemented (presets → engine parameters)
+7. Query Expansion / HyDE query enhancement
+8. Unit test coverage
+9. Prometheus monitoring integration
+10. SPLADE learned sparse retrieval (upgrade from BM25)
+11. ColBERT-style late interaction for precision-critical domains
 
 ---
 
-**Last Updated**: 2026-02-15
+**Last Updated**: 2026-02-27
 **Status**: Production ready
 **Core Strengths**: Complete features, optimized RAG pipeline, one-click deploy, centralized API client, Headless API + SSE streaming

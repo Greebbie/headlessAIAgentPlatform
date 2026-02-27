@@ -74,6 +74,7 @@ async def invoke_stream(req: InvokeRequest, db: AsyncSession = Depends(get_db)):
                 "workflow_status": response.workflow_status,
                 "escalated": response.escalated,
                 "escalation_reason": response.escalation_reason,
+                "skill_info": response.skill_info,
                 "metadata": response.metadata,
             }))
 

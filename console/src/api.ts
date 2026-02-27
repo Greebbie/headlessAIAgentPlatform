@@ -8,7 +8,6 @@ const api = axios.create({
 // ── Agents ──────────────────────────────────────────
 export const agentApi = {
   list: (tenantId = 'default') => api.get('/agents/', { params: { tenant_id: tenantId } }),
-  get: (id: string) => api.get(`/agents/${id}`),
   create: (data: any) => api.post('/agents/', data),
   update: (id: string, data: any) => api.put(`/agents/${id}`, data),
   delete: (id: string) => api.delete(`/agents/${id}`),
@@ -17,7 +16,6 @@ export const agentApi = {
 // ── Workflows ───────────────────────────────────────
 export const workflowApi = {
   list: (tenantId = 'default') => api.get('/workflows/', { params: { tenant_id: tenantId } }),
-  get: (id: string) => api.get(`/workflows/${id}`),
   create: (data: any) => api.post('/workflows/', data),
   update: (id: string, data: any) => api.put(`/workflows/${id}`, data),
   delete: (id: string) => api.delete(`/workflows/${id}`),
@@ -44,7 +42,6 @@ export const knowledgeApi = {
 // ── Tools ───────────────────────────────────────────
 export const toolApi = {
   list: (tenantId = 'default') => api.get('/tools/', { params: { tenant_id: tenantId } }),
-  get: (id: string) => api.get(`/tools/${id}`),
   create: (data: any) => api.post('/tools/', data),
   update: (id: string, data: any) => api.put(`/tools/${id}`, data),
   delete: (id: string) => api.delete(`/tools/${id}`),
@@ -68,7 +65,6 @@ export const invokeApi = {
 // ── LLM Configs ─────────────────────────────────────
 export const llmConfigApi = {
   list: (tenantId = 'default') => api.get('/llm-configs/', { params: { tenant_id: tenantId } }),
-  get: (id: string) => api.get(`/llm-configs/${id}`),
   create: (data: any) => api.post('/llm-configs/', data),
   update: (id: string, data: any) => api.put(`/llm-configs/${id}`, data),
   delete: (id: string) => api.delete(`/llm-configs/${id}`),
@@ -80,17 +76,30 @@ export const llmConfigApi = {
 // ── Performance ─────────────────────────────────────
 export const performanceApi = {
   getPresets: () => api.get('/performance/presets'),
-  getPreset: (name: string) => api.get(`/performance/presets/${name}`),
   applyPreset: (preset: string) => api.post('/performance/presets/apply', { preset }),
   getCurrentConfig: () => api.get('/performance/current-config'),
   updateConfig: (data: any) => api.post('/performance/update-config', data),
 };
 
-// ── Vector Admin ────────────────────────────────────
-export const vectorAdminApi = {
-  getStats: () => api.get('/vector-admin/stats'),
-  rebuild: () => api.post('/vector-admin/rebuild'),
-  getHealth: () => api.get('/vector-admin/health'),
+// ── Agent Capabilities ────────────────────────────
+export const agentCapabilitiesApi = {
+  get: (agentId: string) => api.get(`/agents/${agentId}/capabilities`),
+  update: (agentId: string, data: any) => api.put(`/agents/${agentId}/capabilities`, data),
+};
+
+// ── Skills ─────────────────────────────────────────
+export const skillApi = {
+  list: (tenantId = 'default', managedBy?: string) => api.get('/skills/', { params: { tenant_id: tenantId, managed_by: managedBy } }),
+  create: (data: any) => api.post('/skills/', data),
+  update: (id: string, data: any) => api.put(`/skills/${id}`, data),
+  delete: (id: string) => api.delete(`/skills/${id}`),
+};
+
+// ── Agent Connections ──────────────────────────────
+export const agentConnectionApi = {
+  list: (tenantId = 'default', agentId?: string) => api.get('/agent-connections/', { params: { tenant_id: tenantId, agent_id: agentId } }),
+  create: (data: any) => api.post('/agent-connections/', data),
+  delete: (id: string) => api.delete(`/agent-connections/${id}`),
 };
 
 export default api;

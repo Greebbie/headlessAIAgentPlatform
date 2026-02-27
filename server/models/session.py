@@ -26,6 +26,10 @@ class ConversationSession(Base):
     collected_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
     # Context / memory
     context: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
+    # Currently executing skill (for skill_based routing)
+    active_skill_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Delegation chain for circular-reference prevention (max depth 3)
+    delegation_chain: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Status: active | paused | escalated | completed
     status: Mapped[str] = mapped_column(String(16), default="active")
     message_count: Mapped[int] = mapped_column(Integer, default=0)

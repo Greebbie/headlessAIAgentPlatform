@@ -101,7 +101,7 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
     "dashscope": {
         "provider": "dashscope",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-plus",
+        "model": "qwen-flash",
         "temperature": 0.3,
         "top_p": 0.8,
         "max_tokens": 2048,

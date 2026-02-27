@@ -59,6 +59,7 @@ interface ChatMessage {
   isStreaming?: boolean;
   error?: boolean;
   workflowCard?: WorkflowCardData;
+  skillInfo?: { skill_id?: string; skill_name?: string; skill_type?: string; delegated_to?: string };
 }
 
 interface Citation {
@@ -96,6 +97,12 @@ const EVENT_COLORS: Record<string, string> = {
   escalation: 'red',
   error: 'red',
   risk_block: 'red',
+  skill_route: 'magenta',
+  skill_dispatch: 'volcano',
+  delegation: 'gold',
+  conversational_init: 'cyan',
+  pre_retrieval: 'green',
+  query_rewrite: 'lime',
 };
 
 /* ── Component ────────────────────────────────────────── */
@@ -139,6 +146,17 @@ export default function PlaygroundPage() {
       .catch(() => message.error('Failed to load agents'))
       .finally(() => setAgentsLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Window resize → auto-hide trace panel on narrow screens ── */
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 900) setTracePanelOpen(false);
+    };
+    window.addEventListener('resize', onResize);
+    onResize();
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   /* ── Auto scroll ───────────────────────────────────── */
 
@@ -222,6 +240,7 @@ export default function PlaygroundPage() {
       let finalTraceId: string | undefined;
       let finalMetadata: Record<string, any> | undefined;
       let finalWorkflowCard: WorkflowCardData | undefined;
+      let finalSkillInfo: ChatMessage['skillInfo'] | undefined;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -272,6 +291,7 @@ export default function PlaygroundPage() {
                 finalFollowups = parsed.followups || [];
                 finalMetadata = parsed.metadata;
                 finalWorkflowCard = parsed.workflow_card;
+                finalSkillInfo = parsed.skill_info || undefined;
                 if (parsed.session_id) setSessionId(parsed.session_id);
               } else if (currentEvent === 'error') {
                 const errorMsg = parsed.error_msg || parsed.detail || 'Unknown error';
@@ -313,6 +333,7 @@ export default function PlaygroundPage() {
             traceId: finalTraceId,
             metadata: finalMetadata,
             workflowCard: finalWorkflowCard,
+            skillInfo: finalSkillInfo,
           };
         }
         return updated;
@@ -370,6 +391,7 @@ export default function PlaygroundPage() {
         traceId: data.trace_id,
         metadata: data.metadata,
         workflowCard: data.workflow_card,
+        skillInfo: data.skill_info || undefined,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
@@ -606,6 +628,20 @@ export default function PlaygroundPage() {
                   )}
                 </div>
 
+                {/* Skill info badge */}
+                {msg.skillInfo && (
+                  <div style={{ marginTop: 4 }}>
+                    <Tag color="purple" style={{ fontSize: 11 }}>
+                      {msg.skillInfo.skill_name || msg.skillInfo.skill_type}
+                    </Tag>
+                    {msg.skillInfo.delegated_to && (
+                      <Tag color="gold" style={{ fontSize: 11 }}>
+                        delegated
+                      </Tag>
+                    )}
+                  </div>
+                )}
+
                 {/* Workflow Card with file upload */}
                 {msg.workflowCard && msg.workflowCard.fields && msg.workflowCard.fields.length > 0 && (
                   <div
@@ -752,7 +788,8 @@ export default function PlaygroundPage() {
       {tracePanelOpen && (
         <div
           style={{
-            width: 380,
+            width: 340,
+            minWidth: 280,
             borderLeft: '1px solid #f0f0f0',
             paddingLeft: 16,
             marginLeft: 16,

@@ -5,6 +5,9 @@ from server.models.tool import ToolDefinition
 from server.models.audit import AuditTrace
 from server.models.session import ConversationSession, Message
 from server.models.llm_config import LLMConfig
+from server.models.skill import Skill
+from server.models.agent_skill import AgentSkill
+from server.models.agent_connection import AgentConnection
 
 __all__ = [
     "Agent",
@@ -17,4 +20,7 @@ __all__ = [
     "ConversationSession",
     "Message",
     "LLMConfig",
+    "Skill",
+    "AgentSkill",
+    "AgentConnection",
 ]

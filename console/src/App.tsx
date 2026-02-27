@@ -1,4 +1,3 @@
-import React from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu } from 'antd';
 import {
@@ -11,6 +10,7 @@ import {
   ExperimentOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 
 import AgentsPage from './pages/AgentsPage';
@@ -22,6 +22,7 @@ import DashboardPage from './pages/DashboardPage';
 import PlaygroundPage from './pages/PlaygroundPage';
 import LLMConfigsPage from './pages/LLMConfigsPage';
 import SettingsPage from './pages/SettingsPage';
+import SkillsPage from './pages/SkillsPage';
 
 const { Header, Sider, Content } = Layout;
 
@@ -29,6 +30,7 @@ const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/playground', icon: <ExperimentOutlined />, label: '测试台' },
   { key: '/agents', icon: <RobotOutlined />, label: 'Agent 管理' },
+  { key: '/skills', icon: <AppstoreOutlined />, label: '技能管理' },
   { key: '/workflows', icon: <ApartmentOutlined />, label: '流程编排' },
   { key: '/knowledge', icon: <BookOutlined />, label: '知识管理' },
   { key: '/tools', icon: <ApiOutlined />, label: '工具管理' },
@@ -66,6 +68,7 @@ export default function App() {
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/workflows" element={<WorkflowsPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
+            <Route path="/skills" element={<SkillsPage />} />
             <Route path="/tools" element={<ToolsPage />} />
             <Route path="/llm-configs" element={<LLMConfigsPage />} />
             <Route path="/audit" element={<AuditPage />} />

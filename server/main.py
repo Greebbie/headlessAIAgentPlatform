@@ -24,8 +24,29 @@ async def lifespan(app: FastAPI):
     from server.db import engine, Base
     import server.models  # noqa: F401 – register all models
 
+    # Initialize default runtime config (balanced preset)
+    from server.runtime_config import runtime_config
+    from server.performance_presets import PRESETS
+    runtime_config.update(PRESETS["balanced"])
+    runtime_config.set("active_preset", "balanced")
+
+    # Pre-initialize jieba to avoid ~1s cold start on first request
+    try:
+        import jieba
+        jieba.initialize()
+    except ImportError:
+        pass
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migration: add llm_config_id column for existing databases
+        from sqlalchemy import text
+        try:
+            await conn.execute(text(
+                "ALTER TABLE agents ADD COLUMN llm_config_id VARCHAR(36) REFERENCES llm_configs(id) ON DELETE SET NULL"
+            ))
+        except Exception:
+            pass  # Column already exists
     yield
     await engine.dispose()
 
@@ -55,6 +76,10 @@ from server.api.mock_tools import router as mock_tools_router
 from server.api.llm_configs import router as llm_configs_router
 from server.api.performance import router as performance_router
 from server.api.vector_admin import router as vector_admin_router
+from server.api.skills import router as skills_router
+from server.api.agent_skills import router as agent_skills_router
+from server.api.agent_connections import router as agent_connections_router
+from server.api.agent_capabilities import router as agent_capabilities_router
 
 prefix = settings.api_prefix
 
@@ -68,6 +93,10 @@ app.include_router(mock_tools_router, prefix=prefix + "/mock-tools", tags=["mock
 app.include_router(llm_configs_router, prefix=prefix + "/llm-configs", tags=["llm-configs"])
 app.include_router(performance_router, prefix=prefix + "/performance", tags=["performance"])
 app.include_router(vector_admin_router, prefix=prefix + "/vector-admin", tags=["vector-admin"])
+app.include_router(skills_router, prefix=prefix + "/skills", tags=["skills"])
+app.include_router(agent_skills_router, prefix=prefix + "/agents", tags=["agent-skills"])
+app.include_router(agent_connections_router, prefix=prefix + "/agent-connections", tags=["agent-connections"])
+app.include_router(agent_capabilities_router, prefix=prefix + "/agents", tags=["agent-capabilities"])
 
 
 @app.get("/health")

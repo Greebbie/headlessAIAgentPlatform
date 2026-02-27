@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Switch,
   Space, message, Tag, Card, Popconfirm, Descriptions,
@@ -271,7 +271,7 @@ export default function LLMConfigsPage() {
         width={680}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, max_tokens: 2048, timeout_ms: 60000, is_default: false }}>
+        <Form form={form} layout="vertical" initialValues={{ temperature: 0.3, top_p: 1.0, max_tokens: 2048, timeout_ms: 60000, is_default: false }}>
           <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Name is required' }]}>
             <Input placeholder="e.g., Production OpenAI Config" />
           </Form.Item>
@@ -331,9 +331,13 @@ export default function LLMConfigsPage() {
             <Input placeholder="gpt-4o / qwen2.5 / glm-4" />
           </Form.Item>
 
-          <Space size="large">
+          <Space size="large" wrap>
             <Form.Item name="temperature" label="Temperature">
               <InputNumber min={0} max={2} step={0.1} style={{ width: 120 }} />
+            </Form.Item>
+
+            <Form.Item name="top_p" label="Top P">
+              <InputNumber min={0} max={1} step={0.05} style={{ width: 120 }} />
             </Form.Item>
 
             <Form.Item name="max_tokens" label="Max Tokens">

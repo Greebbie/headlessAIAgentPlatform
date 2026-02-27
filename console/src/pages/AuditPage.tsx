@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Input, Button, Card, Timeline, Tag, Empty, Descriptions, Space, Table, message } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { auditApi } from '../api';
@@ -76,7 +76,19 @@ export default function AuditPage() {
     { title: '时间', dataIndex: 'timestamp', key: 'timestamp', ellipsis: true },
     {
       title: '操作', key: 'actions', render: (_: any, r: any) => (
-        <Button size="small" onClick={() => { setTraceId(r.trace_id); setTimeout(searchByTrace, 0); }}>
+        <Button size="small" onClick={async () => {
+          setTraceId(r.trace_id);
+          setLoading(true);
+          try {
+            const res = await auditApi.getTrace(r.trace_id);
+            setTraces(res.data);
+            if (res.data.length === 0) message.info('未找到匹配的 Trace');
+          } catch (e: any) {
+            message.error('查询失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+            setTraces([]);
+          }
+          setLoading(false);
+        }}>
           查看链路
         </Button>
       ),

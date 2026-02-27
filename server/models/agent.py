@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Boolean, DateTime, JSON
+from sqlalchemy import String, Text, Boolean, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from server.db import Base
@@ -21,14 +21,10 @@ class Agent(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     # Which LLM model to use (override global)
     llm_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Associated workflow id (optional — pure-QA agents have no workflow)
-    workflow_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    # Multi-workflow scope: {"workflow_ids": ["wf-1", "wf-2"], "descriptions": {"wf-1": "desc"}}
-    workflow_scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # Knowledge domain ids (list of knowledge source ids this agent can access)
-    knowledge_scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # Tool ids this agent may call
-    tool_scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Reference to a saved LLM configuration (takes priority over llm_model)
+    llm_config_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True,
+    )
     # Response style config
     response_config: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=lambda: {
         "default_mode": "short",       # short | expanded
@@ -39,6 +35,8 @@ class Agent(Base):
     })
     # Risk / compliance config
     risk_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Routing mode: "conversational" (default) — LLM-driven with skills as tools
+    skill_routing_mode: Mapped[str] = mapped_column(String(16), default="conversational")
     # Tenant isolation
     tenant_id: Mapped[str] = mapped_column(String(36), default="default")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

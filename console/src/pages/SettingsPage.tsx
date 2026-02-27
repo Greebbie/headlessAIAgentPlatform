@@ -20,6 +20,7 @@ interface PresetData {
   tool_timeout_ms: number;
   tool_max_retries: number;
   keyword_weight: number;
+  ef_search: number;
   reranker_enabled: boolean;
 }
 
@@ -92,7 +93,7 @@ export default function SettingsPage() {
     setSavingConfig(true);
     try {
       const values = await form.validateFields();
-      const res = await performanceApi.updateConfig(values);
+      const res = await performanceApi.updateConfig({ config: values });
       message.success('Configuration updated successfully');
       setCurrentConfig(res.data.config);
     } catch (err: any) {
@@ -153,6 +154,8 @@ export default function SettingsPage() {
                   <Descriptions.Item label="LLM Max Tokens">{preset.llm_max_tokens}</Descriptions.Item>
                   <Descriptions.Item label="LLM Timeout">{(preset.llm_timeout_ms / 1000).toFixed(0)}s</Descriptions.Item>
                   <Descriptions.Item label="Tool Retries">{preset.tool_max_retries}</Descriptions.Item>
+                  <Descriptions.Item label="Keyword Weight">{preset.keyword_weight}</Descriptions.Item>
+                  <Descriptions.Item label="HNSW efSearch">{preset.ef_search}</Descriptions.Item>
                   <Descriptions.Item label="Reranker">
                     <Tag color={preset.reranker_enabled ? 'green' : 'default'}>
                       {preset.reranker_enabled ? 'Enabled' : 'Disabled'}
@@ -218,13 +221,18 @@ export default function SettingsPage() {
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={8}>
-              <Form.Item name="keyword_weight" label="Keyword Weight">
-                <InputNumber min={0} max={1} step={0.1} style={{ width: '100%' }} />
+              <Form.Item name="keyword_weight" label="Keyword Weight (BM25 in RRF)">
+                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
 
           <Row gutter={24}>
+            <Col xs={24} sm={12} md={8}>
+              <Form.Item name="ef_search" label="HNSW efSearch">
+                <InputNumber min={16} max={512} step={16} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
             <Col xs={24} sm={12} md={8}>
               <Form.Item name="llm_temperature" label="LLM Temperature">
                 <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />

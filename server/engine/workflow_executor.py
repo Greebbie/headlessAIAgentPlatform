@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from server.models.workflow import Workflow, WorkflowStep
+from server.models.workflow import WorkflowStep
 from server.models.session import ConversationSession
 from server.engine.tool_gateway import ToolGateway, ToolInvocationError
 from server.engine.audit_logger import AuditLogger
@@ -73,18 +73,6 @@ class WorkflowExecutor:
         session.workflow_state = state
         # Collected data is preserved on the session for potential resume
         return "已退出当前流程。如需继续，随时告诉我。"
-
-    async def load_workflow(self, workflow_id: str) -> Workflow | None:
-        result = await self.db.execute(
-            select(Workflow).where(Workflow.id == workflow_id)
-        )
-        wf = result.scalar_one_or_none()
-        if wf:
-            # Eager load steps
-            await self.db.execute(
-                select(WorkflowStep).where(WorkflowStep.workflow_id == wf.id).order_by(WorkflowStep.order)
-            )
-        return wf
 
     async def get_steps(self, workflow_id: str) -> list[WorkflowStep]:
         result = await self.db.execute(

@@ -16,7 +16,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -58,18 +58,8 @@ class LLMResponse:
     reasoning: str | None = None
 
 
-# Models known to use reasoning/thinking fields or <think> tags
-_REASONING_MODEL_PATTERNS = re.compile(
-    r"qwen3|deepseek.*r1|o1|o3|minimax|MiniMax-M1", re.IGNORECASE
-)
-
 # Pattern to match <think>...</think> blocks in content (vLLM-served models)
 _THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
-
-
-def _is_reasoning_model(model_name: str) -> bool:
-    """Check if a model is known to produce reasoning output."""
-    return bool(_REASONING_MODEL_PATTERNS.search(model_name))
 
 
 def _strip_think_tags(content: str) -> tuple[str, str | None]:
@@ -165,12 +155,28 @@ class LLMAdapter:
         """Serialize LLMMessage list to OpenAI API format.
 
         Handles special message types: tool calls (assistant) and tool results.
+        Converts ToolCallRequest dataclass objects to OpenAI-format dicts.
         """
         result = []
         for m in messages:
             msg: dict[str, Any] = {"role": m.role, "content": m.content}
             if m.tool_calls is not None:
-                msg["tool_calls"] = m.tool_calls
+                serialized = []
+                for tc in m.tool_calls:
+                    if isinstance(tc, dict):
+                        serialized.append(tc)
+                    elif hasattr(tc, "raw") and tc.raw:
+                        serialized.append(tc.raw)
+                    else:
+                        serialized.append({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function_name,
+                                "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else str(tc.arguments),
+                            },
+                        })
+                msg["tool_calls"] = serialized
             if m.tool_call_id is not None:
                 msg["tool_call_id"] = m.tool_call_id
             result.append(msg)
@@ -246,12 +252,20 @@ class LLMAdapter:
         """
         t0 = time.perf_counter()
         model = kwargs.get("model", self.model)
+        # Wrap tools in OpenAI format if needed: [{"type": "function", "function": {...}}]
+        formatted_tools = []
+        for t in tools:
+            if "type" in t and "function" in t:
+                formatted_tools.append(t)  # already in OpenAI format
+            else:
+                formatted_tools.append({"type": "function", "function": t})
+
         payload = {
             "model": model,
             "messages": self._serialize_messages(messages),
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "tools": tools,
+            "tools": formatted_tools,
             "stream": False,
         }
         async with self._make_client() as client:
@@ -310,99 +324,6 @@ class LLMAdapter:
             reasoning=reasoning if reasoning else None,
         )
 
-    async def chat_stream(self, messages: list[LLMMessage], **kwargs) -> AsyncIterator[str]:
-        """Streaming chat completion — yields content deltas.
-
-        Handles two reasoning patterns:
-        1. Separate `reasoning` field in delta (Ollama) — buffer and skip
-        2. `<think>` tags in content delta (vLLM) — buffer until </think>, then yield
-        """
-        payload = {
-            "model": kwargs.get("model", self.model),
-            "messages": self._serialize_messages(messages),
-            "temperature": kwargs.get("temperature", self.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
-            "stream": True,
-        }
-        has_content = False
-        reasoning_buffer = []
-        # State machine for <think> tag stripping in streaming
-        in_think_block = False
-
-        async with self._make_client(timeout=120) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    chunk = line[6:]
-                    if chunk.strip() == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(chunk)
-                    except json.JSONDecodeError:
-                        continue
-                    delta = data.get("choices", [{}])[0].get("delta", {})
-
-                    # Pattern 1: Separate reasoning field (Ollama/Qwen3)
-                    if "reasoning" in delta and delta["reasoning"]:
-                        reasoning_buffer.append(delta["reasoning"])
-
-                    # Content deltas — check for <think> tags (vLLM pattern)
-                    if "content" in delta and delta["content"]:
-                        text = delta["content"]
-
-                        if in_think_block:
-                            # Inside <think> block — buffer as reasoning
-                            if "</think>" in text:
-                                # End of thinking block
-                                parts = text.split("</think>", 1)
-                                reasoning_buffer.append(parts[0])
-                                in_think_block = False
-                                # Yield remaining content after </think>
-                                remainder = parts[1].lstrip()
-                                if remainder:
-                                    has_content = True
-                                    yield remainder
-                            else:
-                                reasoning_buffer.append(text)
-                        elif "<think>" in text:
-                            # Start of thinking block
-                            parts = text.split("<think>", 1)
-                            # Yield content before <think> tag
-                            before = parts[0]
-                            if before.strip():
-                                has_content = True
-                                yield before
-                            in_think_block = True
-                            # Check if </think> also appears in this chunk
-                            after = parts[1]
-                            if "</think>" in after:
-                                think_parts = after.split("</think>", 1)
-                                reasoning_buffer.append(think_parts[0])
-                                in_think_block = False
-                                remainder = think_parts[1].lstrip()
-                                if remainder:
-                                    has_content = True
-                                    yield remainder
-                            else:
-                                reasoning_buffer.append(after)
-                        else:
-                            # Normal content — yield directly
-                            has_content = True
-                            yield text
-
-        # Fallback: If no content was yielded but reasoning exists
-        if not has_content and reasoning_buffer:
-            full_reasoning = "".join(reasoning_buffer)
-            extracted = _extract_content_from_reasoning(full_reasoning)
-            if extracted:
-                yield extracted
 
 
 # Thread-safe singleton default adapter
@@ -419,3 +340,58 @@ def get_llm_adapter(**kwargs) -> LLMAdapter:
             if _default_adapter is None:
                 _default_adapter = LLMAdapter()
     return _default_adapter
+
+
+def _adapter_from_config(config) -> LLMAdapter:
+    """Create an LLMAdapter from a DB LLMConfig record."""
+    return LLMAdapter(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        model=config.model,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout=config.timeout_ms // 1000 if config.timeout_ms else None,
+    )
+
+
+async def get_llm_adapter_for_agent(agent, db) -> LLMAdapter:
+    """Resolve the LLM adapter for an agent using a four-level chain:
+
+    1. agent.llm_config_id → load full LLMConfig from DB
+    2. agent.llm_model → override model name only (other params from env vars)
+    3. Tenant default LLMConfig (is_default=True)
+    4. Global env vars singleton
+    """
+    from sqlalchemy import select
+    from server.models.llm_config import LLMConfig
+
+    # 1. Explicit LLM config reference
+    if agent.llm_config_id:
+        result = await db.execute(
+            select(LLMConfig).where(LLMConfig.id == agent.llm_config_id)
+        )
+        config = result.scalar_one_or_none()
+        if config:
+            logger.debug(f"Agent {agent.id}: using LLMConfig '{config.name}'")
+            return _adapter_from_config(config)
+        logger.warning(f"Agent {agent.id}: llm_config_id '{agent.llm_config_id}' not found, falling back")
+
+    # 2. Model name override
+    if agent.llm_model:
+        logger.debug(f"Agent {agent.id}: using model override '{agent.llm_model}'")
+        return get_llm_adapter(model=agent.llm_model)
+
+    # 3. Tenant default config
+    result = await db.execute(
+        select(LLMConfig).where(
+            LLMConfig.tenant_id == agent.tenant_id,
+            LLMConfig.is_default == True,
+        )
+    )
+    default_config = result.scalar_one_or_none()
+    if default_config:
+        logger.debug(f"Agent {agent.id}: using tenant default LLMConfig '{default_config.name}'")
+        return _adapter_from_config(default_config)
+
+    # 4. Global env vars singleton
+    return get_llm_adapter()

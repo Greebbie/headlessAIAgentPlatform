@@ -37,9 +37,12 @@ dev = [
     "ruff>=0.3.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["server*"]
+
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
@@ -48,3 +51,6 @@ target-version = "py310"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end tests requiring a running server",
+]

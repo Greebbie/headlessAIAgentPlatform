@@ -132,7 +132,6 @@ async def unit_converter(data: dict):
         ("kg", "lb"): 2.20462, ("lb", "kg"): 0.453592,
         ("kg", "oz"): 35.274, ("oz", "kg"): 0.0283495,
     }
-    temperature = {}  # handled specially
 
     key = (from_unit, to_unit)
 

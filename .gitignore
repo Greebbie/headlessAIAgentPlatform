@@ -39,10 +39,14 @@ console/node_modules/
 console/dist/
 console/.next/
 
-# Data
-data/vectors/
-data/uploads/
-data/cache/
+# Data (entire directory — DB, vectors, uploads, cache)
+data/
+
+# Pre-built frontend (deploy script builds this)
+static/
+
+# Claude Code local settings
+.claude/
 
 # Coverage
 htmlcov/

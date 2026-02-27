@@ -12,6 +12,7 @@ PRESETS = {
         "tool_timeout_ms": 10000,
         "tool_max_retries": 1,
         "keyword_weight": 0.3,
+        "ef_search": 64,
         "reranker_enabled": False,
     },
     "balanced": {
@@ -25,6 +26,7 @@ PRESETS = {
         "tool_timeout_ms": 30000,
         "tool_max_retries": 2,
         "keyword_weight": 0.5,
+        "ef_search": 128,
         "reranker_enabled": False,
     },
     "accurate": {
@@ -38,6 +40,7 @@ PRESETS = {
         "tool_timeout_ms": 60000,
         "tool_max_retries": 3,
         "keyword_weight": 0.7,
+        "ef_search": 256,
         "reranker_enabled": True,
     },
 }

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
 from server.models.agent import Agent
+from server.models.skill import Skill
+from server.models.agent_skill import AgentSkill
 from server.schemas.agent import AgentCreate, AgentUpdate, AgentOut
 
 router = APIRouter()
@@ -26,12 +28,10 @@ async def create_agent(body: AgentCreate, db: AsyncSession = Depends(get_db)):
         description=body.description,
         system_prompt=body.system_prompt,
         llm_model=body.llm_model,
-        workflow_id=body.workflow_id,
-        workflow_scope=body.workflow_scope,
-        knowledge_scope=body.knowledge_scope,
-        tool_scope=body.tool_scope,
+        llm_config_id=body.llm_config_id,
         response_config=body.response_config,
         risk_config=body.risk_config,
+        enabled=body.enabled,
         tenant_id=body.tenant_id,
     )
     db.add(agent)
@@ -72,5 +72,15 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(404, "Agent not found")
+
+    # Delete all agent-skill bindings for this agent
+    await db.execute(delete(AgentSkill).where(AgentSkill.agent_id == agent_id))
+
+    # Delete auto-managed skills
+    tag = f"agent:{agent_id}"
+    result = await db.execute(select(Skill).where(Skill.managed_by == tag))
+    for skill in result.scalars().all():
+        await db.delete(skill)
+
     await db.delete(agent)
     await db.commit()

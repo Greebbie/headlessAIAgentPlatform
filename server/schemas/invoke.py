@@ -65,5 +65,7 @@ class InvokeResponse(BaseModel):
     # Escalation info
     escalated: bool = False
     escalation_reason: str | None = None
+    # Skill routing info (only for skill_based agents)
+    skill_info: dict[str, Any] | None = None
     # Metadata
     metadata: dict[str, Any] | None = None

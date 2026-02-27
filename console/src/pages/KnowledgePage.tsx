@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, Space, message, Tag, Card, List, Upload, InputNumber, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, SearchOutlined, UploadOutlined, EyeOutlined } from '@ant-design/icons';
 import { knowledgeApi } from '../api';
 
 const { TextArea } = Input;
@@ -15,6 +15,10 @@ export default function KnowledgePage() {
   const [uploadModal, setUploadModal] = useState(false);
   const [searchResults, setSearchResults] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
+  const [chunkModal, setChunkModal] = useState(false);
+  const [chunks, setChunks] = useState<any[]>([]);
+  const [chunkLoading, setChunkLoading] = useState(false);
+  const [chunkSourceName, setChunkSourceName] = useState('');
   const [sourceForm] = Form.useForm();
   const [kvForm] = Form.useForm();
   const [faqForm] = Form.useForm();
@@ -118,6 +122,21 @@ export default function KnowledgePage() {
     }
   };
 
+  const handleViewChunks = async (sourceId: string, sourceName: string) => {
+    setChunkSourceName(sourceName);
+    setChunkModal(true);
+    setChunkLoading(true);
+    try {
+      const res = await knowledgeApi.listChunks(sourceId);
+      setChunks(res.data);
+    } catch (e: any) {
+      message.error('加载条目失败: ' + (e.response?.data?.detail || e.message || '未知错误'));
+      setChunks([]);
+    } finally {
+      setChunkLoading(false);
+    }
+  };
+
   const handleDeleteSource = async (id: string) => {
     try {
       await knowledgeApi.deleteSource(id);
@@ -129,7 +148,12 @@ export default function KnowledgePage() {
   };
 
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name' },
+    {
+      title: '名称', dataIndex: 'name', key: 'name',
+      render: (v: string, record: any) => (
+        <a onClick={() => handleViewChunks(record.id, v)}>{v}</a>
+      ),
+    },
     {
       title: '类型', dataIndex: 'source_type', key: 'source_type',
       render: (v: string) => {
@@ -142,9 +166,12 @@ export default function KnowledgePage() {
     { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={v === 'ready' ? 'green' : 'orange'}>{v}</Tag> },
     {
       title: '操作', key: 'actions', render: (_: any, record: any) => (
-        <Popconfirm title="确认删除此知识源及其所有条目？" onConfirm={() => handleDeleteSource(record.id)} okText="确认" cancelText="取消">
-          <Button icon={<DeleteOutlined />} size="small" danger>删除</Button>
-        </Popconfirm>
+        <Space>
+          <Button icon={<EyeOutlined />} size="small" onClick={() => handleViewChunks(record.id, record.name)}>查看</Button>
+          <Popconfirm title="确认删除此知识源及其所有条目？" onConfirm={() => handleDeleteSource(record.id)} okText="确认" cancelText="取消">
+            <Button icon={<DeleteOutlined />} size="small" danger>删除</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -211,8 +238,8 @@ export default function KnowledgePage() {
             <Select placeholder="选择目标知识源" options={sourceOptions} />
           </Form.Item>
           <Form.Item name="file" label="文件" valuePropName="fileList" getValueFromEvent={(e: any) => e?.fileList} rules={[{ required: true }]}>
-            <Upload beforeUpload={() => false} maxCount={1} accept=".txt,.md">
-              <Button icon={<UploadOutlined />}>选择文件 (.txt, .md)</Button>
+            <Upload beforeUpload={() => false} maxCount={1} accept=".txt,.md,.pdf,.docx">
+              <Button icon={<UploadOutlined />}>选择文件 (.txt, .md, .pdf, .docx)</Button>
             </Upload>
           </Form.Item>
           <Form.Item name="domain" label="知识域" initialValue="default"><Input /></Form.Item>
@@ -223,6 +250,35 @@ export default function KnowledgePage() {
             <InputNumber min={0} max={500} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* Chunk viewer */}
+      <Modal
+        title={`条目查看 — ${chunkSourceName}`}
+        open={chunkModal}
+        onCancel={() => setChunkModal(false)}
+        footer={null}
+        width={860}
+      >
+        <Table
+          dataSource={chunks}
+          rowKey="id"
+          loading={chunkLoading}
+          size="small"
+          pagination={{ pageSize: 10 }}
+          columns={[
+            { title: '关键词', dataIndex: 'entity_key', key: 'entity_key', width: 160, ellipsis: true },
+            {
+              title: '内容', dataIndex: 'content', key: 'content',
+              ellipsis: true,
+              render: (v: string) => (
+                <span title={v}>{v && v.length > 120 ? v.slice(0, 120) + '...' : v}</span>
+              ),
+            },
+            { title: '域', dataIndex: 'domain', key: 'domain', width: 100 },
+          ]}
+          locale={{ emptyText: '该知识源暂无条目' }}
+        />
       </Modal>
 
       {/* Search test */}

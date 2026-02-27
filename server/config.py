@@ -23,15 +23,15 @@ class Settings(BaseSettings):
     llm_provider: Literal["openai_compatible", "dashscope", "zhipu", "local"] = "openai_compatible"
     llm_base_url: str = "http://localhost:11434/v1"
     llm_api_key: str = ""
-    llm_model: str = "qwen2.5"
+    llm_model: str = "qwen-flash"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 2048
     llm_timeout: int = 60  # Per-request LLM call timeout in seconds
 
     # ── Embedding ────────────────────────────────────
     embedding_provider: Literal["local", "dashscope", "openai_compatible"] = "local"
-    embedding_model: str = "BAAI/bge-small-zh-v1.5"
-    embedding_dim: int = 512
+    embedding_model: str = "BAAI/bge-m3"
+    embedding_dim: int = 1024
 
     # ── Vector Store ─────────────────────────────────
     vector_store: Literal["faiss", "milvus"] = "faiss"
