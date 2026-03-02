@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
@@ -12,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.models.tool import ToolDefinition
 from server.engine.audit_logger import AuditLogger
+
+logger = logging.getLogger(__name__)
 
 
 class ToolInvocationError(Exception):
@@ -21,14 +25,36 @@ class ToolInvocationError(Exception):
         super().__init__(f"Tool '{tool_name}': {message}")
 
 
-# ── Built-in function tool registry ─────────────────────────────
-# Maps function tool names to their mock-tool router paths
-_BUILTIN_FUNCTION_TOOLS: dict[str, str] = {
-    "calculator": "/api/v1/mock-tools/calculator",
-    "weather": "/api/v1/mock-tools/weather",
-    "unit_converter": "/api/v1/mock-tools/unit_converter",
-    "timestamp": "/api/v1/mock-tools/timestamp",
-}
+# ── Direct in-process mock tool handlers ─────────────────────────
+# These are called directly without HTTP, avoiding loopback issues.
+
+def _resolve_mock_handler(endpoint: str):
+    """If the endpoint points to a known mock-tool path, return the handler."""
+    if not endpoint:
+        return None
+    path = urlparse(endpoint).path.rstrip("/")
+    return _MOCK_TOOL_HANDLERS.get(path)
+
+
+def _lazy_init_handlers() -> dict:
+    """Lazily import mock tool functions to avoid circular imports."""
+    from server.api.mock_tools import (
+        calculator,
+        weather,
+        unit_converter,
+        timestamp_tool,
+        webhook_receiver,
+    )
+    return {
+        "/api/v1/mock-tools/calculator": calculator,
+        "/api/v1/mock-tools/weather": weather,
+        "/api/v1/mock-tools/unit_converter": unit_converter,
+        "/api/v1/mock-tools/timestamp": timestamp_tool,
+        "/api/v1/mock-tools/webhook": webhook_receiver,
+    }
+
+
+_MOCK_TOOL_HANDLERS: dict = {}
 
 
 class ToolGateway:
@@ -96,43 +122,34 @@ class ToolGateway:
         raise ToolInvocationError(tool.name, f"Failed after {tool.max_retries + 1} attempts: {last_error}")
 
     async def _call(self, tool: ToolDefinition, input_data: dict[str, Any]) -> dict[str, Any]:
-        """Execute a single tool call — dispatches to HTTP or built-in function."""
-        # Function-type tools: route to built-in mock tools via local HTTP
-        if tool.category == "function":
-            return await self._call_function_tool(tool, input_data)
+        """Execute a single tool call — dispatches to in-process mock, or HTTP."""
+        # 1. Try direct in-process call for mock tools (no HTTP needed)
+        handler = self._get_mock_handler(tool)
+        if handler is not None:
+            return await handler(input_data)
 
-        # HTTP-type tools (api, webhook, rpc)
+        # 2. HTTP tools (api, webhook, rpc, or function with custom endpoint)
         return await self._call_http_tool(tool, input_data)
 
-    async def _call_function_tool(self, tool: ToolDefinition, input_data: dict[str, Any]) -> dict[str, Any]:
-        """Dispatch a function-type tool to a built-in handler via local HTTP."""
-        # Try to resolve the tool name to a built-in path
-        tool_name_lower = tool.name.lower().replace(" ", "_").replace("-", "_")
-        local_path = _BUILTIN_FUNCTION_TOOLS.get(tool_name_lower)
+    def _get_mock_handler(self, tool: ToolDefinition):
+        """Resolve a tool to a direct in-process handler if it matches a mock tool."""
+        global _MOCK_TOOL_HANDLERS
+        if not _MOCK_TOOL_HANDLERS:
+            _MOCK_TOOL_HANDLERS = _lazy_init_handlers()
 
-        if not local_path and tool.endpoint:
-            # If tool has a custom endpoint, use it as HTTP
-            return await self._call_http_tool(tool, input_data)
+        # Check by endpoint URL path
+        if tool.endpoint:
+            handler = _resolve_mock_handler(tool.endpoint)
+            if handler:
+                return handler
 
-        if not local_path:
-            raise ToolInvocationError(
-                tool.name,
-                f"Function tool '{tool.name}' has no built-in handler and no endpoint configured",
-                recoverable=False,
-            )
+        return None
 
-        # Call the local FastAPI endpoint
-        timeout = tool.timeout_ms / 1000
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"http://127.0.0.1:8000{local_path}",
-                json=input_data,
-            )
-            resp.raise_for_status()
-            try:
-                return resp.json()
-            except Exception:
-                return {"raw": resp.text}
+    @staticmethod
+    def _is_localhost(url: str) -> bool:
+        """Check if a URL points to the local machine."""
+        host = urlparse(url).hostname or ""
+        return host in ("localhost", "127.0.0.1", "::1")
 
     async def _call_http_tool(self, tool: ToolDefinition, input_data: dict[str, Any]) -> dict[str, Any]:
         """Execute an HTTP tool call."""
@@ -151,8 +168,10 @@ class ToolGateway:
                 headers[key_name] = tool.auth_config.get("token", "")
 
         timeout = tool.timeout_ms / 1000
+        # Bypass env proxy for loopback calls (avoids SOCKS5/HTTP proxy interfering)
+        trust_env = not self._is_localhost(tool.endpoint)
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=trust_env) as client:
             if tool.method.upper() == "GET":
                 resp = await client.get(tool.endpoint, params=input_data, headers=headers)
             elif tool.method.upper() == "POST":
@@ -177,22 +196,17 @@ class ToolGateway:
         if tool is None:
             return {"success": False, "error": "Tool not found"}
 
-        if tool.category == "function":
-            # For function tools, check if the built-in handler exists
-            tool_name_lower = tool.name.lower().replace(" ", "_").replace("-", "_")
-            if tool_name_lower in _BUILTIN_FUNCTION_TOOLS:
-                return {"success": True, "status_code": 200, "latency_ms": 0, "note": "Built-in function tool"}
-            elif tool.endpoint:
-                pass  # Fall through to HTTP test
-            else:
-                return {"success": False, "error": "No built-in handler or endpoint configured"}
+        # Check for in-process mock handler first
+        if self._get_mock_handler(tool):
+            return {"success": True, "status_code": 200, "latency_ms": 0, "note": "In-process mock tool (no HTTP)"}
 
         if not tool.endpoint:
             return {"success": False, "error": "No endpoint configured"}
 
         t0 = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            trust_env = not self._is_localhost(tool.endpoint)
+            async with httpx.AsyncClient(timeout=10, trust_env=trust_env) as client:
                 resp = await client.request(tool.method.upper(), tool.endpoint, headers={"Content-Type": "application/json"})
                 return {
                     "success": True,

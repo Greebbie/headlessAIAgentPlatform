@@ -11,6 +11,7 @@ import httpx
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from server.models.workflow import WorkflowStep
 from server.models.session import ConversationSession
@@ -69,11 +70,10 @@ class WorkflowExecutor:
 
     def cancel_workflow(self, session: ConversationSession) -> str:
         """Cancel the current workflow and preserve collected data for potential resume."""
-        # Create a new dict so SQLAlchemy detects the JSON column change
         state = dict(session.workflow_state or {})
         state["status"] = "cancelled"
         session.workflow_state = state
-        # Collected data is preserved on the session for potential resume
+        flag_modified(session, "workflow_state")
         return "已退出当前流程。如需继续，随时告诉我。"
 
     async def get_steps(self, workflow_id: str) -> list[WorkflowStep]:
@@ -138,6 +138,10 @@ class WorkflowExecutor:
         """Collect form fields from user, including file uploads and LLM validation."""
         fields = step.fields or []
 
+        # No fields to collect — this is a display-only step, auto-advance
+        if not fields:
+            return await self._advance(steps, idx, session, _depth)
+
         if form_data:
             # Validate submitted data
             errors = []
@@ -189,6 +193,7 @@ class WorkflowExecutor:
 
             # All valid → advance
             session.collected_data = collected
+            flag_modified(session, "collected_data")
             return await self._advance(steps, idx, session, _depth)
 
         # No form data yet — prompt user
@@ -301,6 +306,7 @@ class WorkflowExecutor:
                 collected[local_field] = result.get(tool_field, "")
             collected[f"_tool_result_{step.name}"] = result
             session.collected_data = collected
+            flag_modified(session, "collected_data")
 
             if self.audit:
                 self.audit.log("workflow_step", workflow_meta={
@@ -364,6 +370,7 @@ class WorkflowExecutor:
             "current_step_index": idx,
             "status": "completed",
         }
+        flag_modified(session, "workflow_state")
         # Filter out internal keys (e.g. _tool_result_*) for the user-facing summary
         user_data = {k: v for k, v in collected.items() if not k.startswith("_")}
 
@@ -381,6 +388,7 @@ class WorkflowExecutor:
                         "ok": resp.is_success,
                     }
                     session.collected_data = collected
+                    flag_modified(session, "collected_data")
             except Exception as e:
                 logger.warning("Webhook failed for workflow complete step '%s': %s", step.name, e)
                 collected["_webhook_result"] = {
@@ -389,6 +397,7 @@ class WorkflowExecutor:
                     "error": str(e),
                 }
                 session.collected_data = collected
+                flag_modified(session, "collected_data")
                 if self.audit:
                     self.audit.log("workflow_step", workflow_meta={
                         "step_id": step.id,
@@ -415,12 +424,12 @@ class WorkflowExecutor:
         next_idx = current_idx + 1
 
         if next_idx >= len(steps):
-            # Create a fresh dict to guarantee SQLAlchemy detects the change
             session.workflow_state = {
                 **(session.workflow_state or {}),
                 "current_step_index": next_idx,
                 "status": "completed",
             }
+            flag_modified(session, "workflow_state")
             # Build completion message with tool results
             collected = dict(session.collected_data or {})
             user_data = {k: v for k, v in collected.items() if not k.startswith("_")}
@@ -444,16 +453,21 @@ class WorkflowExecutor:
                 return WorkflowStepResult(status="completed", message=msg, card=completion_card)
             return WorkflowStepResult(status="completed", message="流程已全部完成！", card=completion_card)
 
-        # Not yet complete — advance step index (fresh dict for SQLAlchemy)
+        # Not yet complete — advance step index
         session.workflow_state = {
             **(session.workflow_state or {}),
             "current_step_index": next_idx,
         }
+        flag_modified(session, "workflow_state")
 
         next_step = steps[next_idx]
 
         # Auto-execute non-interactive steps (with depth guard)
-        if next_step.step_type in ("validate", "tool_call", "complete"):
+        # Also auto-execute collect steps with no fields (display-only steps)
+        is_auto = next_step.step_type in ("validate", "tool_call", "complete")
+        if not is_auto and next_step.step_type == "collect" and not (next_step.fields or []):
+            is_auto = True
+        if is_auto:
             return await self.process_step(session, "", None, _depth=_depth + 1)
 
         return WorkflowStepResult(

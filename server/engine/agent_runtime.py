@@ -17,6 +17,7 @@ from typing import Awaitable, Callable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from server.models.agent import Agent
 from server.models.agent_skill import AgentSkill
@@ -221,8 +222,14 @@ class AgentRuntime:
 
         msg_lower = req.message.strip().lower()
 
-        # ── Fast-path: Active workflow bypass ──
+        # ── Safety net: if workflow already completed, clear stale state ──
         wf_state = session.workflow_state or {}
+        if wf_state.get("status") in ("completed", "cancelled"):
+            session.workflow_state = None
+            session.active_skill_id = None
+            wf_state = {}
+
+        # ── Fast-path: Active workflow bypass ──
         if wf_state.get("status") in ("in_progress", "waiting_input"):
             # Check for workflow exit keywords
             for kw in _WORKFLOW_EXIT_KEYWORDS:
@@ -786,6 +793,7 @@ class AgentRuntime:
                 "current_step_index": 0,
                 "status": "in_progress",
             }
+            flag_modified(session, "workflow_state")
             session.active_skill_id = skill.id
 
             tool_gw = ToolGateway(self.db, audit)
@@ -972,11 +980,9 @@ class AgentRuntime:
 
         if result.status in ("completed", "cancelled", "escalated"):
             session.active_skill_id = None
-            # Force a new dict so SQLAlchemy detects the JSON column change
-            session.workflow_state = {
-                **(session.workflow_state or {}),
-                "status": result.status,
-            }
+            # Set to None — SQLAlchemy reliably detects NULL vs dict change
+            session.workflow_state = None
+            flag_modified(session, "workflow_state")
 
         await self._save_message(session.id, "user", req.message, trace_id)
         await self._save_message(session.id, "assistant", result.message, trace_id)
@@ -1106,12 +1112,22 @@ class AgentRuntime:
 
     @staticmethod
     def _sanitize_function_name(name: str) -> str:
-        """Sanitize name for OpenAI function calling (alphanumeric + underscores)."""
-        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-        sanitized = re.sub(r'^[0-9]+', '', sanitized)
-        # Collapse multiple underscores and strip leading/trailing
-        sanitized = re.sub(r'_+', '_', sanitized).strip('_')
-        return sanitized or "unnamed"
+        """Sanitize name for OpenAI function calling (alphanumeric + underscores).
+
+        Non-ASCII characters (e.g. Chinese) are transliterated to a hash-based
+        suffix so that each unique name produces a unique, stable function name.
+        """
+        # Extract any ASCII portion first
+        ascii_part = re.sub(r'[^a-zA-Z0-9_]', '', name)
+        if ascii_part:
+            sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+            sanitized = re.sub(r'^[0-9]+', '', sanitized)
+            sanitized = re.sub(r'_+', '_', sanitized).strip('_')
+            return sanitized or "unnamed"
+        # Purely non-ASCII name: use a stable hash to create a unique identifier
+        import hashlib
+        digest = hashlib.md5(name.encode()).hexdigest()[:8]
+        return f"tool_{digest}"
 
     # ── General helpers ──────────────────────────────────────
 
@@ -1166,7 +1182,7 @@ class AgentRuntime:
 
     async def _save_session(self, session: ConversationSession):
         session.message_count = (session.message_count or 0) + 1
-        await self.db.flush()
+        await self.db.commit()
 
     def _risk_precheck(self, agent: Agent, message: str) -> str | None:
         risk_config = agent.risk_config or {}
