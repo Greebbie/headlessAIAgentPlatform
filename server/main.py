@@ -16,7 +16,11 @@ from server.config import settings
 # Ensure data directory exists for SQLite
 os.makedirs("./data", exist_ok=True)
 
-STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_project_root = Path(__file__).resolve().parent.parent
+STATIC_DIR = _project_root / "static"
+if not STATIC_DIR.is_dir():
+    # Fallback: serve from console/dist (development / pre-built frontend)
+    STATIC_DIR = _project_root / "console" / "dist"
 
 
 @asynccontextmanager
@@ -105,13 +109,27 @@ async def health():
 
 
 # ── Serve frontend SPA (production) ─────────────────
+# Uses a custom ASGI app mounted at "/" so it is evaluated AFTER all API
+# routes — this avoids the catch-all @app.get("/{path:path}") problem that
+# intercepts /api/* paths (including FastAPI's trailing-slash redirects).
 if STATIC_DIR.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="static-assets")
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
-    @app.get("/{full_path:path}")
-    async def spa_fallback(request: Request, full_path: str):
-        """Serve index.html for all non-API routes (SPA client-side routing)."""
-        file_path = STATIC_DIR / full_path
-        if file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(STATIC_DIR / "index.html"))
+    _index_html = STATIC_DIR / "index.html"
+    _static_files = StaticFiles(directory=str(STATIC_DIR))
+
+    class _SPAStaticFiles:
+        """Serve static files; fall back to index.html for SPA routing."""
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await _static_files(scope, receive, send)
+                return
+            try:
+                await _static_files(scope, receive, send)
+            except Exception:
+                # File not found → serve index.html (SPA client-side routing)
+                scope["path"] = "/index.html"
+                await _static_files(scope, receive, send)
+
+    app.mount("/", _SPAStaticFiles())

@@ -44,6 +44,10 @@ class WorkflowCard(BaseModel):
     # Current step index & total
     current_step: int = 0
     total_steps: int = 0
+    # Collected data summary (populated on completion)
+    collected_data: dict[str, Any] | None = None
+    # Webhook send result (populated on completion if webhook enabled)
+    webhook_result: dict[str, Any] | None = None
 
 
 class InvokeResponse(BaseModel):

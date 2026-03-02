@@ -4,6 +4,7 @@ import {
   Collapse,
   Empty,
   Input,
+  InputNumber,
   List,
   message,
   Select,
@@ -16,6 +17,7 @@ import {
   Upload,
 } from 'antd';
 import {
+  CheckCircleOutlined,
   ClearOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -46,6 +48,8 @@ interface WorkflowCardData {
   }>;
   current_step: number;
   total_steps: number;
+  collected_data?: Record<string, any>;
+  webhook_result?: { ok?: boolean; status?: number; error?: string };
 }
 
 interface ChatMessage {
@@ -59,6 +63,7 @@ interface ChatMessage {
   isStreaming?: boolean;
   error?: boolean;
   workflowCard?: WorkflowCardData;
+  workflowStatus?: string;
   skillInfo?: { skill_id?: string; skill_name?: string; skill_type?: string; delegated_to?: string };
 }
 
@@ -119,6 +124,9 @@ export default function PlaygroundPage() {
   const [sending, setSending] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [useStreaming, setUseStreaming] = useState(true);
+
+  /* state — workflow form */
+  const [workflowFormData, setWorkflowFormData] = useState<Record<string, any>>({});
 
   /* state — trace panel */
   const [tracePanelOpen, setTracePanelOpen] = useState(true);
@@ -190,12 +198,13 @@ export default function PlaygroundPage() {
     setSessionId(null);
     setTraceEvents([]);
     setActiveCitations([]);
+    setWorkflowFormData({});
     setSending(false);
   };
 
   /* ── Send via SSE streaming ────────────────────────── */
 
-  const sendStreaming = async (userMessage: string) => {
+  const sendStreaming = async (userMessage: string, formData?: Record<string, any>) => {
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -215,6 +224,7 @@ export default function PlaygroundPage() {
         tenant_id: 'default',
       };
       if (sessionId) body.session_id = sessionId;
+      if (formData) body.form_data = formData;
 
       const response = await fetch('/api/v1/invoke/stream', {
         method: 'POST',
@@ -240,6 +250,7 @@ export default function PlaygroundPage() {
       let finalTraceId: string | undefined;
       let finalMetadata: Record<string, any> | undefined;
       let finalWorkflowCard: WorkflowCardData | undefined;
+      let finalWorkflowStatus: string | undefined;
       let finalSkillInfo: ChatMessage['skillInfo'] | undefined;
 
       while (true) {
@@ -291,6 +302,7 @@ export default function PlaygroundPage() {
                 finalFollowups = parsed.followups || [];
                 finalMetadata = parsed.metadata;
                 finalWorkflowCard = parsed.workflow_card;
+                finalWorkflowStatus = parsed.workflow_status;
                 finalSkillInfo = parsed.skill_info || undefined;
                 if (parsed.session_id) setSessionId(parsed.session_id);
               } else if (currentEvent === 'error') {
@@ -333,6 +345,7 @@ export default function PlaygroundPage() {
             traceId: finalTraceId,
             metadata: finalMetadata,
             workflowCard: finalWorkflowCard,
+            workflowStatus: finalWorkflowStatus,
             skillInfo: finalSkillInfo,
           };
         }
@@ -368,7 +381,7 @@ export default function PlaygroundPage() {
 
   /* ── Send via sync invoke (fallback) ───────────────── */
 
-  const sendSync = async (userMessage: string) => {
+  const sendSync = async (userMessage: string, formData?: Record<string, any>) => {
     try {
       const body: Record<string, any> = {
         agent_id: selectedAgentId!,
@@ -376,6 +389,7 @@ export default function PlaygroundPage() {
         tenant_id: 'default',
       };
       if (sessionId) body.session_id = sessionId;
+      if (formData) body.form_data = formData;
 
       const res = await invokeApi.send(body);
       const data = res.data;
@@ -391,6 +405,7 @@ export default function PlaygroundPage() {
         traceId: data.trace_id,
         metadata: data.metadata,
         workflowCard: data.workflow_card,
+        workflowStatus: data.workflow_status,
         skillInfo: data.skill_info || undefined,
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -413,35 +428,66 @@ export default function PlaygroundPage() {
     }
   };
 
-  /* ── Send handler ──────────────────────────────────── */
+  /* ── Send payload (shared by text input & workflow actions) ── */
 
-  const handleSend = async () => {
-    const text = inputValue.trim();
-    if (!text) return;
+  const sendPayload = async (text: string, formData?: Record<string, any>) => {
     if (!selectedAgentId) {
       message.warning('Please select an agent first');
       return;
     }
 
-    /* Append user message */
-    const userMsg: ChatMessage = {
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    };
+    const userMsg: ChatMessage = { role: 'user', content: text, timestamp: Date.now() };
     setMessages((prev) => [...prev, userMsg]);
-    setInputValue('');
     setSending(true);
 
     try {
       if (useStreaming) {
-        await sendStreaming(text);
+        await sendStreaming(text, formData);
       } else {
-        await sendSync(text);
+        await sendSync(text, formData);
       }
     } finally {
       setSending(false);
     }
+  };
+
+  /* ── Send handler (text input) ───────────────────── */
+
+  const handleSend = async () => {
+    const text = inputValue.trim();
+    if (!text) return;
+    setInputValue('');
+    await sendPayload(text);
+  };
+
+  /* ── Workflow form submit ────────────────────────── */
+
+  const handleWorkflowSubmit = async (msgIdx: number) => {
+    const card = messages[msgIdx]?.workflowCard;
+    if (!card?.fields) return;
+
+    for (const field of card.fields) {
+      if (field.required && (workflowFormData[field.name] === undefined || workflowFormData[field.name] === '')) {
+        message.warning(`Please fill in: ${field.label}`);
+        return;
+      }
+    }
+
+    const fd = { ...workflowFormData };
+    setWorkflowFormData({});
+    await sendPayload('[Form Submitted]', fd);
+  };
+
+  /* ── Workflow confirm / cancel ───────────────────── */
+
+  const handleWorkflowConfirm = async () => {
+    setWorkflowFormData({});
+    await sendPayload('确认');
+  };
+
+  const handleWorkflowCancel = async () => {
+    setWorkflowFormData({});
+    await sendPayload('取消');
   };
 
   /* ── Handle followup click ─────────────────────────── */
@@ -457,6 +503,225 @@ export default function PlaygroundPage() {
       e.preventDefault();
       if (!sending) handleSend();
     }
+  };
+
+  /* ── Active workflow card index (only the latest waiting_input card is interactive) ── */
+
+  const activeWorkflowIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return -1;
+      if (messages[i].workflowCard && messages[i].workflowStatus === 'waiting_input') return i;
+    }
+    return -1;
+  })();
+
+  /* ── Render workflow card ────────────────────────── */
+
+  const renderWorkflowCard = (msg: ChatMessage, idx: number) => {
+    const card = msg.workflowCard;
+    if (!card) return null;
+
+    const isCompleted = msg.workflowStatus === 'completed' || card.step_type === 'complete';
+    const isConfirm = card.step_type === 'confirm';
+    const isActive = idx === activeWorkflowIdx && !sending;
+
+    /* ── Completed state ── */
+    if (isCompleted) {
+      return (
+        <div
+          style={{
+            marginTop: 8,
+            padding: '12px 16px',
+            background: '#f6ffed',
+            border: '1px solid #52c41a',
+            borderRadius: 8,
+          }}
+        >
+          <Space>
+            <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 18 }} />
+            <Text strong style={{ color: '#52c41a' }}>
+              Workflow Completed
+            </Text>
+            {card.webhook_result && (
+              <Tag color={card.webhook_result.ok ? 'green' : 'red'}>
+                {card.webhook_result.ok
+                  ? `Webhook \u2713 ${card.webhook_result.status}`
+                  : `Webhook \u2717 ${card.webhook_result.error || card.webhook_result.status}`}
+              </Tag>
+            )}
+          </Space>
+          {card.prompt && (
+            <div style={{ marginTop: 8, color: '#333', fontSize: 13 }}>{card.prompt}</div>
+          )}
+          {card.collected_data && Object.keys(card.collected_data).length > 0 && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: '8px 12px',
+                background: '#fff',
+                borderRadius: 6,
+                border: '1px solid #d9f7be',
+              }}
+            >
+              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 6 }}>
+                Collected Data
+              </Text>
+              {Object.entries(card.collected_data).map(([key, val]) => (
+                <div key={key} style={{ fontSize: 12, marginBottom: 2 }}>
+                  <Text strong style={{ fontSize: 12 }}>{key}: </Text>
+                  <Text style={{ fontSize: 12 }}>{String(val)}</Text>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* ── Confirm step ── */
+    if (isConfirm) {
+      return (
+        <div
+          style={{
+            marginTop: 8,
+            padding: '12px 16px',
+            background: '#fffbe6',
+            border: '1px solid #ffe58f',
+            borderRadius: 8,
+          }}
+        >
+          <div style={{ marginBottom: 8 }}>
+            <Tag color="orange">
+              Step {card.current_step}/{card.total_steps}
+            </Tag>
+            <Text strong>{card.step_name}</Text>
+          </div>
+          <div style={{ marginBottom: 12, color: '#333', fontSize: 13 }}>
+            {card.prompt || 'Please confirm the information above.'}
+          </div>
+          {isActive && (
+            <Space>
+              <Button type="primary" onClick={handleWorkflowConfirm}>
+                Confirm
+              </Button>
+              <Button danger onClick={handleWorkflowCancel}>
+                Cancel
+              </Button>
+            </Space>
+          )}
+        </div>
+      );
+    }
+
+    /* ── Collect step (with fields) ── */
+    if (!card.fields || card.fields.length === 0) return null;
+
+    return (
+      <div
+        style={{
+          marginTop: 8,
+          padding: '12px 16px',
+          background: '#f6ffed',
+          border: '1px solid #b7eb8f',
+          borderRadius: 8,
+          maxWidth: '100%',
+        }}
+      >
+        <div style={{ marginBottom: 8 }}>
+          <Tag color="green">
+            Step {card.current_step}/{card.total_steps}
+          </Tag>
+          <Text strong>{card.step_name}</Text>
+        </div>
+        {card.fields.map((field) => (
+          <div key={field.name} style={{ marginBottom: 10 }}>
+            <div style={{ marginBottom: 4 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {field.label}
+                {field.required && <span style={{ color: 'red' }}> *</span>}
+              </Text>
+            </div>
+            {isActive ? (
+              /* ── Active: editable form controls ── */
+              field.field_type === 'number' ? (
+                <InputNumber
+                  style={{ width: '100%' }}
+                  placeholder={field.placeholder || `Enter ${field.label}`}
+                  value={workflowFormData[field.name]}
+                  onChange={(val) =>
+                    setWorkflowFormData((prev) => ({ ...prev, [field.name]: val }))
+                  }
+                />
+              ) : field.field_type === 'select' ? (
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder={field.placeholder || `Select ${field.label}`}
+                  value={workflowFormData[field.name]}
+                  onChange={(val) =>
+                    setWorkflowFormData((prev) => ({ ...prev, [field.name]: val }))
+                  }
+                  options={field.options}
+                />
+              ) : field.field_type === 'file' ? (
+                <div>
+                  <Upload
+                    beforeUpload={() => false}
+                    maxCount={1}
+                    accept={field.file_config?.allowed_extensions
+                      ?.map((ext: string) => (ext.startsWith('.') ? ext : `.${ext}`))
+                      .join(',')}
+                    onChange={(info) =>
+                      setWorkflowFormData((prev) => ({
+                        ...prev,
+                        [field.name]: info.fileList[0]?.originFileObj?.name || info.fileList[0]?.name,
+                      }))
+                    }
+                  >
+                    <Button icon={<UploadOutlined />} size="small">
+                      Upload
+                      {field.file_config?.max_size_mb && (
+                        <span style={{ fontSize: 11, color: '#999' }}>
+                          {' '}
+                          (max {field.file_config.max_size_mb}MB)
+                        </span>
+                      )}
+                    </Button>
+                  </Upload>
+                  {field.file_config?.allowed_extensions && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      Formats: {field.file_config.allowed_extensions.join(', ')}
+                    </Text>
+                  )}
+                </div>
+              ) : (
+                <Input
+                  placeholder={field.placeholder || `Enter ${field.label}`}
+                  value={workflowFormData[field.name] ?? ''}
+                  onChange={(e) =>
+                    setWorkflowFormData((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                />
+              )
+            ) : (
+              /* ── Inactive: read-only display ── */
+              <div style={{ fontSize: 12, color: '#999', fontStyle: 'italic' }}>
+                {field.placeholder || field.label}
+              </div>
+            )}
+          </div>
+        ))}
+        {isActive && (
+          <Button
+            type="primary"
+            style={{ marginTop: 4 }}
+            onClick={() => handleWorkflowSubmit(idx)}
+            loading={sending}
+          >
+            Submit
+          </Button>
+        )}
+      </div>
+    );
   };
 
   /* ── Render ────────────────────────────────────────── */
@@ -642,63 +907,8 @@ export default function PlaygroundPage() {
                   </div>
                 )}
 
-                {/* Workflow Card with file upload */}
-                {msg.workflowCard && msg.workflowCard.fields && msg.workflowCard.fields.length > 0 && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      padding: '12px 16px',
-                      background: '#f6ffed',
-                      border: '1px solid #b7eb8f',
-                      borderRadius: 8,
-                      maxWidth: '100%',
-                    }}
-                  >
-                    <div style={{ marginBottom: 8 }}>
-                      <Tag color="green">
-                        步骤 {msg.workflowCard.current_step}/{msg.workflowCard.total_steps}
-                      </Tag>
-                      <Text strong>{msg.workflowCard.step_name}</Text>
-                    </div>
-                    {msg.workflowCard.fields.map((field) => (
-                      <div key={field.name} style={{ marginBottom: 6 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {field.label}
-                          {field.required && <span style={{ color: 'red' }}> *</span>}
-                        </Text>
-                        {field.field_type === 'file' ? (
-                          <div style={{ marginTop: 4 }}>
-                            <Upload
-                              beforeUpload={() => false}
-                              maxCount={1}
-                              accept={field.file_config?.allowed_extensions?.map(
-                                (ext: string) => ext.startsWith('.') ? ext : `.${ext}`
-                              ).join(',')}
-                            >
-                              <Button icon={<UploadOutlined />} size="small">
-                                上传文件
-                                {field.file_config?.max_size_mb && (
-                                  <span style={{ fontSize: 11, color: '#999' }}>
-                                    {' '}(最大 {field.file_config.max_size_mb}MB)
-                                  </span>
-                                )}
-                              </Button>
-                            </Upload>
-                            {field.file_config?.allowed_extensions && (
-                              <Text type="secondary" style={{ fontSize: 11 }}>
-                                支持格式: {field.file_config.allowed_extensions.join(', ')}
-                              </Text>
-                            )}
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 12, color: '#666' }}>
-                            {field.placeholder || `请输入${field.label}`}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {/* Workflow Card (interactive form / confirm / completed) */}
+                {renderWorkflowCard(msg, idx)}
 
                 {/* Citations */}
                 {msg.citations && msg.citations.length > 0 && (

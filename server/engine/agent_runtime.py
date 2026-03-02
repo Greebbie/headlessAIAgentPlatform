@@ -88,6 +88,46 @@ _WORKFLOW_EXIT_KEYWORDS = {
     "cancel", "quit", "exit", "abort", "stop",
 }
 
+# ── Greeting / chitchat fast-path detection ───────────────
+
+_GREETING_PREFIXES = [
+    "你好", "您好", "嗨", "hi", "hello", "hey", "哈喽", "嘿",
+    "早上好", "下午好", "晚上好", "早安", "晚安",
+    "good morning", "good afternoon", "good evening",
+]
+
+_GREETING_EXACT = {
+    "你是谁", "你是什么", "介绍一下你自己", "你能做什么",
+    "what can you do", "who are you",
+}
+
+
+def _is_chitchat(message: str) -> bool:
+    """Fast check: is this a PURE greeting with no real question attached?
+
+    "你好" → True (pure greeting)
+    "你好，我想报修" → False (greeting + real request)
+    "你是谁" → True (about the bot itself)
+    """
+    msg = message.strip().lower()
+    # Strip trailing punctuation for matching
+    cleaned = msg.rstrip("?？!！。.~，, ")
+    if len(cleaned) <= 2:
+        return True
+    # Exact matches (e.g. "你是谁")
+    if cleaned in _GREETING_EXACT:
+        return True
+    # Check if message is ONLY a greeting prefix (possibly with punctuation)
+    for p in _GREETING_PREFIXES:
+        if cleaned == p:
+            return True
+        # "你好呀" / "你好啊" — greeting + filler particle, still chitchat
+        if cleaned.startswith(p) and len(cleaned) - len(p) <= 2:
+            remainder = cleaned[len(p):]
+            if not remainder or all(c in "呀啊呢哦哈吖嘛噢耶" for c in remainder):
+                return True
+    return False
+
 
 # ── Multi-turn query rewriting ─────────────────────────────────
 
@@ -195,20 +235,27 @@ class AgentRuntime:
                 agent, session, req, trace_id, audit,
             )
 
+        # ── Fast-path: greeting / chitchat — skip retrieval entirely ──
+        is_chitchat = _is_chitchat(msg_lower)
+        if is_chitchat:
+            audit.log("chitchat_detected", event_data={"message": req.message})
+
         # ── Check if user intends a workflow action ──
         # If the message matches workflow skill keywords, skip pre-retrieval
         # so the LLM isn't distracted by knowledge data and uses function calling
-        has_action_intent = await self._has_workflow_intent(agent.id, msg_lower)
-        if has_action_intent:
-            audit.log("action_intent_detected", event_data={
-                "message": req.message,
-                "skip_pre_retrieval": True,
-            })
+        has_action_intent = False
+        if not is_chitchat:
+            has_action_intent = await self._has_workflow_intent(agent.id, msg_lower)
+            if has_action_intent:
+                audit.log("action_intent_detected", event_data={
+                    "message": req.message,
+                    "skip_pre_retrieval": True,
+                })
 
         # ── Pre-retrieval for knowledge skills ──
         pre_context = ""
         pre_citations: list[Citation] = []
-        if not has_action_intent:
+        if not has_action_intent and not is_chitchat:
             knowledge_skills = await self._get_knowledge_skills(agent.id)
             if knowledge_skills:
                 # Use rewritten query for better retrieval

@@ -7,6 +7,8 @@ import os
 import re
 from typing import Any
 
+import httpx
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -356,15 +358,56 @@ class WorkflowExecutor:
         )
 
     async def _handle_complete(self, step, steps, idx, collected, session) -> WorkflowStepResult:
-        """Final step — workflow is done."""
+        """Final step — workflow is done.  Optionally POST collected data to a webhook."""
         session.workflow_state = {
             **(session.workflow_state or {}),
             "current_step_index": idx,
             "status": "completed",
         }
+        # Filter out internal keys (e.g. _tool_result_*) for the user-facing summary
+        user_data = {k: v for k, v in collected.items() if not k.startswith("_")}
+
+        # ── Webhook: send collected data to external endpoint ──
+        tool_config = step.tool_config or {}
+        webhook_url = tool_config.get("webhook_url")
+        if webhook_url and tool_config.get("webhook_enabled"):
+            method = tool_config.get("webhook_method", "POST").upper()
+            headers = tool_config.get("webhook_headers") or {}
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.request(method, webhook_url, json=user_data, headers=headers)
+                    collected["_webhook_result"] = {
+                        "status": resp.status_code,
+                        "ok": resp.is_success,
+                    }
+                    session.collected_data = collected
+            except Exception as e:
+                logger.warning("Webhook failed for workflow complete step '%s': %s", step.name, e)
+                collected["_webhook_result"] = {
+                    "status": 0,
+                    "ok": False,
+                    "error": str(e),
+                }
+                session.collected_data = collected
+                if self.audit:
+                    self.audit.log("workflow_step", workflow_meta={
+                        "step_id": step.id,
+                        "step_name": step.name,
+                        "status": "webhook_failed",
+                        "error": str(e),
+                    })
+
+        card = self._make_card(step, steps, idx, collected_data=user_data)
+
+        # Attach webhook result to card for frontend visibility
+        webhook_result = collected.get("_webhook_result")
+        if webhook_result:
+            card.webhook_result = webhook_result
+
         return WorkflowStepResult(
             status="completed",
             message=step.prompt_template or "流程已完成！感谢您的办理。",
+            card=card,
         )
 
     async def _advance(self, steps, current_idx, session, _depth: int = 0) -> WorkflowStepResult:
@@ -379,16 +422,26 @@ class WorkflowExecutor:
             session.workflow_state = state
             # Build completion message with tool results
             collected = dict(session.collected_data or {})
+            user_data = {k: v for k, v in collected.items() if not k.startswith("_")}
             tool_results = [v for k, v in collected.items() if k.startswith("_tool_result_") and isinstance(v, dict)]
+            completion_card = WorkflowCard(
+                step_name="完成",
+                step_type="complete",
+                prompt="流程已全部完成！",
+                current_step=len(steps),
+                total_steps=len(steps),
+                collected_data=user_data,
+            )
             if tool_results:
                 last = tool_results[-1]
                 # Use formatted/forecast/result fields if available, otherwise join key=value
                 for display_key in ("formatted", "forecast", "result", "datetime"):
                     if display_key in last and last[display_key]:
-                        return WorkflowStepResult(status="completed", message=str(last[display_key]))
+                        return WorkflowStepResult(status="completed", message=str(last[display_key]), card=completion_card)
                 summary_parts = [f"{k}: {v}" for k, v in last.items() if k != "success" and v]
-                return WorkflowStepResult(status="completed", message="\n".join(summary_parts) if summary_parts else "流程已全部完成！")
-            return WorkflowStepResult(status="completed", message="流程已全部完成！")
+                msg = "\n".join(summary_parts) if summary_parts else "流程已全部完成！"
+                return WorkflowStepResult(status="completed", message=msg, card=completion_card)
+            return WorkflowStepResult(status="completed", message="流程已全部完成！", card=completion_card)
 
         next_step = steps[next_idx]
 
@@ -402,7 +455,10 @@ class WorkflowExecutor:
             card=self._make_card(next_step, steps, next_idx),
         )
 
-    def _make_card(self, step: WorkflowStep, steps: list[WorkflowStep], idx: int) -> WorkflowCard:
+    def _make_card(
+        self, step: WorkflowStep, steps: list[WorkflowStep], idx: int,
+        collected_data: dict[str, Any] | None = None,
+    ) -> WorkflowCard:
         return WorkflowCard(
             step_name=step.name,
             step_type=step.step_type,
@@ -410,6 +466,7 @@ class WorkflowExecutor:
             fields=step.fields,
             current_step=idx + 1,
             total_steps=len(steps),
+            collected_data=collected_data,
         )
 
 

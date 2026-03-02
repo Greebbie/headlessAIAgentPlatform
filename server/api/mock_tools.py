@@ -6,10 +6,13 @@ via function calling. Useful for testing the full tool-calling pipeline.
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime
 
 from fastapi import APIRouter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -160,6 +163,41 @@ async def unit_converter(data: dict):
     }
 
 
+@router.post("/create_work_order")
+async def create_work_order(data: dict):
+    """Mock work order creation tool — generates a work order from collected repair info."""
+    location = data.get("location", "")
+    issue_type = data.get("issue_type", "")
+    description = data.get("description", "")
+    contact_phone = data.get("contact_phone", "")
+
+    if not location or not description:
+        return {"error": "Missing required fields: location, description", "success": False}
+
+    # Generate a work order number based on timestamp
+    order_no = f"WO-{int(datetime.now().timestamp())}"
+    issue_labels = {
+        "plumbing_electrical": "水电维修",
+        "hvac": "空调故障",
+        "door_window": "门窗损坏",
+        "network": "网络问题",
+        "other": "其他",
+    }
+
+    return {
+        "order_no": order_no,
+        "location": location,
+        "issue_type": issue_labels.get(issue_type, issue_type),
+        "description": description,
+        "contact_phone": contact_phone,
+        "status": "已派单",
+        "created_at": datetime.now().isoformat(),
+        "estimated_response": "2小时内",
+        "result": f"工单 {order_no} 已创建成功！维修人员将在2小时内响应。",
+        "success": True,
+    }
+
+
 @router.post("/timestamp")
 async def timestamp_tool(data: dict):
     """Current timestamp / date-time tool."""
@@ -183,4 +221,15 @@ async def timestamp_tool(data: dict):
         "timezone": tz_name,
         "unix_timestamp": int(now.timestamp()),
         "success": True,
+    }
+
+
+@router.post("/webhook")
+async def webhook_receiver(data: dict):
+    """Generic webhook receiver for testing workflow completion hooks."""
+    logger.info("Webhook received: %s", data)
+    return {
+        "received": True,
+        "fields": list(data.keys()),
+        "message": f"Successfully received {len(data)} fields",
     }
