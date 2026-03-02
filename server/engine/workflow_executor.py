@@ -413,13 +413,14 @@ class WorkflowExecutor:
     async def _advance(self, steps, current_idx, session, _depth: int = 0) -> WorkflowStepResult:
         """Move to the next step."""
         next_idx = current_idx + 1
-        state = dict(session.workflow_state or {})
-        state["current_step_index"] = next_idx
-        session.workflow_state = state
 
         if next_idx >= len(steps):
-            state["status"] = "completed"
-            session.workflow_state = state
+            # Create a fresh dict to guarantee SQLAlchemy detects the change
+            session.workflow_state = {
+                **(session.workflow_state or {}),
+                "current_step_index": next_idx,
+                "status": "completed",
+            }
             # Build completion message with tool results
             collected = dict(session.collected_data or {})
             user_data = {k: v for k, v in collected.items() if not k.startswith("_")}
@@ -442,6 +443,12 @@ class WorkflowExecutor:
                 msg = "\n".join(summary_parts) if summary_parts else "流程已全部完成！"
                 return WorkflowStepResult(status="completed", message=msg, card=completion_card)
             return WorkflowStepResult(status="completed", message="流程已全部完成！", card=completion_card)
+
+        # Not yet complete — advance step index (fresh dict for SQLAlchemy)
+        session.workflow_state = {
+            **(session.workflow_state or {}),
+            "current_step_index": next_idx,
+        }
 
         next_step = steps[next_idx]
 

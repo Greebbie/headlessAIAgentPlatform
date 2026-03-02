@@ -972,6 +972,11 @@ class AgentRuntime:
 
         if result.status in ("completed", "cancelled", "escalated"):
             session.active_skill_id = None
+            # Force a new dict so SQLAlchemy detects the JSON column change
+            session.workflow_state = {
+                **(session.workflow_state or {}),
+                "status": result.status,
+            }
 
         await self._save_message(session.id, "user", req.message, trace_id)
         await self._save_message(session.id, "assistant", result.message, trace_id)
