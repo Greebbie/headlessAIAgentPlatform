@@ -18,7 +18,7 @@ env/
 *.swp
 *.swo
 
-# Environment
+# Environment (contains API keys)
 .env
 .env.local
 
@@ -34,23 +34,38 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Node (console frontend)
+# Node — root and console
+node_modules/
+package-lock.json
+console/package-lock.json
 console/node_modules/
 console/dist/
 console/.next/
 
-# Data (entire directory — DB, vectors, uploads, cache)
+# Data (DB, vectors, uploads, cache)
 data/
 
-# Pre-built frontend (deploy script builds this)
+# Pre-built frontend
 static/
 
-# Claude Code local settings
+# Claude Code / AI tooling (internal, not for repo)
 .claude/
+CLAUDE.md
+TRACKING.md
+REQUIREMENTS.md
+docs/superpowers/
+.superpowers/
+.playwright-mcp/
+
+# Tests (contain API keys, run locally only)
+tests/
+demo_full_test.py
+test_e2e.js
+playwright.config.ts
+test-results/
+test-screenshots/
 
 # Coverage
 htmlcov/
 .coverage
 .pytest_cache/
-/.playwright-mcp
-/.superpowers
