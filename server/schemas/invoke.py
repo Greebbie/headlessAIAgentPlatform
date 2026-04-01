@@ -22,6 +22,12 @@ class InvokeRequest(BaseModel):
     expand: bool = False
     # Client metadata (device, channel, etc.)
     client_meta: dict[str, Any] | None = None
+    # Conversation context carried from parent agent during delegation
+    context_messages: list[dict[str, Any]] | None = None
+    # Parent session ID for delegation chain tracking
+    parent_session_id: str | None = None
+    # Shared key-value memory propagated across agent delegation chain
+    shared_context: dict[str, Any] | None = None
 
 
 class Citation(BaseModel):

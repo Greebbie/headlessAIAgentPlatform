@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.db import get_db
 from server.models.agent_connection import AgentConnection
 from server.schemas.skill import AgentConnectionCreate, AgentConnectionUpdate, AgentConnectionOut
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 VALID_CONNECTION_TYPES = {"delegate", "orchestrate", "peer"}
 

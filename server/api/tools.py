@@ -10,8 +10,9 @@ from server.db import get_db
 from server.models.tool import ToolDefinition
 from server.schemas.tool import ToolCreate, ToolUpdate, ToolOut, ToolTestRequest, ToolTestResponse
 from server.engine.tool_gateway import ToolGateway
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/", response_model=list[ToolOut])

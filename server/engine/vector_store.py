@@ -6,7 +6,9 @@ Provides:
   instruction prefix for queries.
 - VectorStoreManager: thread-safe singleton wrapping FAISS IndexHNSWFlat
   (falls back to loading legacy IndexFlatIP indexes read-only).
-- get_vector_store(): returns the singleton or None if deps are unavailable.
+  Implements VectorStoreAdapter for uniform access.
+- get_vector_store(): factory that returns the appropriate VectorStoreAdapter
+  (FAISS or pgvector) based on configuration, or None if deps are unavailable.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from server.config import settings
+from server.engine.vector_adapter import VectorStoreAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -214,12 +217,13 @@ class EmbeddingModel:
 # ── FAISS Vector Store ─────────────────────────────────────────
 
 
-class VectorStoreManager:
+class VectorStoreManager(VectorStoreAdapter):
     """Thread-safe FAISS vector store singleton with disk persistence.
 
     New indexes use IndexHNSWFlat (M=32, efConstruction=200) for fast ANN search.
     Legacy IndexFlatIP indexes can still be loaded and searched, but a log
     warning prompts the user to rebuild via /vector-admin/rebuild.
+    Implements VectorStoreAdapter for uniform backend access.
     """
 
     _instance: VectorStoreManager | None = None
@@ -316,10 +320,10 @@ class VectorStoreManager:
             self._ids.append(chunk_id)
             self._domains.append(domain)
 
-    def add_batch(self, items: list[dict[str, str]]) -> None:
-        """Batch embed and add. Each item: {chunk_id, text, domain}."""
+    def add_batch(self, items: list[dict[str, str]]) -> int:
+        """Batch embed and add. Each item: {chunk_id, text, domain}. Returns count added."""
         if not items:
-            return
+            return 0
         texts = [it["text"] for it in items]
         vecs = self._embedding.encode(texts, mode="document").astype(np.float32)
         with self._write_lock:
@@ -327,6 +331,7 @@ class VectorStoreManager:
             for it in items:
                 self._ids.append(it["chunk_id"])
                 self._domains.append(it.get("domain", "default"))
+        return len(items)
 
     def save(self) -> None:
         """Persist index and sidecar to disk."""
@@ -380,10 +385,42 @@ class VectorStoreManager:
 
         return results
 
+    # ── Delete ─────────────────────────────────────────
+
+    def delete(self, chunk_ids: list[str]) -> int:
+        """Delete vectors by chunk IDs.
+
+        FAISS does not support in-place deletion for HNSW indexes, so this
+        removes entries from the ID/domain sidecar lists and marks positions
+        as orphaned.  A full rebuild via /vector-admin/rebuild is recommended
+        after bulk deletes to reclaim space and maintain search accuracy.
+        """
+        if not chunk_ids:
+            return 0
+        id_set = set(chunk_ids)
+        removed = 0
+        with self._write_lock:
+            new_ids: list[str] = []
+            new_domains: list[str] = []
+            for i, cid in enumerate(self._ids):
+                if cid in id_set:
+                    removed += 1
+                else:
+                    new_ids.append(cid)
+                    new_domains.append(self._domains[i])
+            self._ids = new_ids
+            self._domains = new_domains
+        if removed > 0:
+            logger.info(
+                "Removed %d IDs from FAISS sidecar (index vectors remain until rebuild).",
+                removed,
+            )
+        return removed
+
     # ── Stats ──────────────────────────────────────────
 
-    @property
     def count(self) -> int:
+        """Return total number of vectors in the index."""
         return self._index.ntotal if self._index else 0
 
     @property
@@ -401,12 +438,81 @@ class VectorStoreManager:
         return (self._index.ntotal * self._embedding.dimension * 4) / (1024 * 1024)
 
 
-# ── Module-level helper ────────────────────────────────────────
+# ── Module-level factory ──────────────────────────────────────
 
-def get_vector_store() -> VectorStoreManager | None:
-    """Return the global VectorStoreManager singleton, or None if deps unavailable."""
-    try:
-        return VectorStoreManager.get_instance()
-    except Exception as e:
-        logger.warning(f"Failed to initialize vector store: {e}")
+# Singleton for the active vector store adapter
+_vector_store_instance: VectorStoreAdapter | None = None
+_vector_store_lock = threading.Lock()
+
+
+def _resolve_backend() -> str:
+    """Determine which vector store backend to use based on config.
+
+    Returns one of: "faiss", "pgvector", "milvus".
+    """
+    configured = settings.vector_store
+    if configured != "auto":
+        return configured
+
+    # Auto-detect: PostgreSQL database URL -> pgvector, otherwise -> faiss
+    db_url = settings.database_url
+    if "postgresql" in db_url or "postgres" in db_url:
+        return "pgvector"
+    return "faiss"
+
+
+def get_vector_store() -> VectorStoreAdapter | None:
+    """Return the global VectorStoreAdapter singleton, or None if deps unavailable.
+
+    Backend selection:
+      - "auto" (default): pgvector if database URL is PostgreSQL, else FAISS
+      - "faiss": always use FAISS
+      - "pgvector": always use pgvector
+      - "milvus": reserved for future implementation
+    """
+    global _vector_store_instance
+
+    if _vector_store_instance is not None:
+        return _vector_store_instance
+
+    with _vector_store_lock:
+        if _vector_store_instance is not None:
+            return _vector_store_instance
+
+        backend = _resolve_backend()
+        logger.info("Initializing vector store backend: %s", backend)
+
+        try:
+            if backend == "pgvector":
+                store = _init_pgvector()
+            elif backend == "faiss":
+                store = _init_faiss()
+            else:
+                logger.warning("Unsupported vector store backend: %s", backend)
+                return None
+
+            _vector_store_instance = store
+            return store
+        except Exception as e:
+            logger.warning("Failed to initialize vector store (%s): %s", backend, e)
+            return None
+
+
+def _init_faiss() -> VectorStoreManager | None:
+    """Initialize the FAISS-based vector store."""
+    return VectorStoreManager.get_instance()
+
+
+def _init_pgvector() -> VectorStoreAdapter | None:
+    """Initialize the pgvector-based vector store."""
+    from server.engine.pgvector_store import PgVectorStore
+
+    emb = EmbeddingModel.get_instance()
+    if emb is None:
+        logger.warning("Embedding model unavailable; pgvector store disabled")
         return None
+
+    return PgVectorStore(
+        db_url=settings.database_url,
+        embedding_manager=emb,
+    )

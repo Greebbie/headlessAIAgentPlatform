@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
 
     # ── Vector Store ─────────────────────────────────
-    vector_store: Literal["faiss", "milvus"] = "faiss"
+    vector_store: Literal["faiss", "pgvector", "milvus", "auto"] = "auto"
     faiss_index_dir: str = "./data/vectors"
     faiss_index_path: str = "./data/vectors/faiss.index"
     milvus_uri: str = "localhost:19530"
@@ -43,10 +43,17 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
 
     # ── Auth ─────────────────────────────────────────
-    disable_auth: bool = True
+    disable_auth: bool = False
     api_key: str = ""
-    secret_key: str = "change-me-in-production"
+    secret_key: str = "change-me-in-production"  # MUST override in production
     access_token_expire_minutes: int = 60 * 24
+
+    # ── JWT ──────────────────────────────────────────
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 1440  # 24 hours
+
+    # ── Rate Limiting ────────────────────────────────
+    rate_limit_per_minute: int = 60
 
     # ── Audit ────────────────────────────────────────
     audit_enabled: bool = True

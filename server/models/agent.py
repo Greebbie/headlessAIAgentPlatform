@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Boolean, DateTime, JSON, ForeignKey
+from sqlalchemy import String, Text, Boolean, DateTime, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from server.db import Base
@@ -13,6 +13,9 @@ from server.db import Base
 
 class Agent(Base):
     __tablename__ = "agents"
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'name', name='uq_agents_tenant_name'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(128), nullable=False)

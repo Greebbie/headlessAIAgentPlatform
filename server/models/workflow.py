@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Integer, DateTime, JSON, ForeignKey
+from sqlalchemy import String, Text, Integer, DateTime, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.db import Base
@@ -77,3 +77,23 @@ class WorkflowStep(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     workflow: Mapped[Workflow] = relationship("Workflow", back_populates="steps")
+
+
+class WorkflowVersion(Base):
+    """Snapshot of a workflow definition at a point in time."""
+
+    __tablename__ = "workflow_versions"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "version", name="uq_workflow_versions_wf_ver"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workflow_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Full snapshot of workflow + steps as JSON
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Who published this version
+    published_by: Mapped[str] = mapped_column(String(128), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

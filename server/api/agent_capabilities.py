@@ -13,8 +13,9 @@ from server.db import get_db
 from server.models.agent import Agent
 from server.models.skill import Skill
 from server.models.agent_skill import AgentSkill
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 # ── Schemas ──────────────────────────────────────────

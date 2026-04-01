@@ -9,12 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
+from server.middleware.auth import get_current_user
 from server.engine.vector_store import get_vector_store
 from server.models.knowledge import KnowledgeChunk
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/stats")
@@ -29,10 +30,10 @@ async def vector_stats():
             "status": "unavailable",
         }
     return {
-        "index_count": vs.count,
+        "index_count": vs.count(),
         "dimension": vs.dimension,
-        "memory_usage_mb": round(vs.memory_usage_mb(), 3),
-        "index_type": "hnsw" if vs.is_hnsw else "flat",
+        "memory_usage_mb": round(vs.memory_usage_mb(), 3) if hasattr(vs, "memory_usage_mb") else 0.0,
+        "index_type": "hnsw" if getattr(vs, "is_hnsw", False) else "pgvector" if type(vs).__name__ == "PgVectorStore" else "flat",
         "status": "ready",
     }
 
@@ -59,19 +60,27 @@ async def rebuild_index(db: AsyncSession = Depends(get_db)):
     ]
 
     try:
-        # Reset internal index to a fresh HNSW index before rebuilding
-        vs._create_hnsw_index()
+        # For FAISS: reset to a fresh HNSW index before rebuilding
+        # For pgvector: delete all existing vectors first
+        if hasattr(vs, "_create_hnsw_index"):
+            vs._create_hnsw_index()
+        else:
+            # pgvector or other DB-backed store: delete all existing chunk IDs
+            all_chunk_ids = [row.id for row in rows]
+            vs.delete(all_chunk_ids)
+
         vs.add_batch(batch)
         vs.save()
     except Exception as e:
         logger.error(f"Rebuild failed: {e}")
         return {"message": f"Rebuild failed: {e}", "status": "error"}
 
+    backend_type = type(vs).__name__
     return {
         "message": f"Index rebuilt with {len(batch)} vectors",
         "status": "completed",
         "count": len(batch),
-        "index_type": "hnsw",
+        "index_type": "hnsw" if getattr(vs, "is_hnsw", False) else "pgvector" if "PgVector" in backend_type else "flat",
     }
 
 
@@ -85,11 +94,12 @@ async def vector_health():
             "backend": "faiss",
             "status": "unavailable",
         }
+    backend_name = type(vs).__name__
     return {
         "initialized": True,
-        "backend": "faiss",
-        "index_count": vs.count,
+        "backend": "pgvector" if "PgVector" in backend_name else "faiss",
+        "index_count": vs.count(),
         "dimension": vs.dimension,
-        "index_type": "hnsw" if vs.is_hnsw else "flat",
+        "index_type": "hnsw" if getattr(vs, "is_hnsw", False) else "pgvector" if "PgVector" in backend_name else "flat",
         "status": "healthy",
     }

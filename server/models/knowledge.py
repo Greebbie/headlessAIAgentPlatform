@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Integer, DateTime, JSON, Float, ForeignKey
+from sqlalchemy import String, Text, Integer, DateTime, JSON, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from server.db import Base
@@ -15,6 +15,9 @@ class KnowledgeSource(Base):
     """A knowledge source (document, FAQ sheet, structured table)."""
 
     __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        UniqueConstraint('tenant_id', 'name', name='uq_knowledge_sources_tenant_name'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -39,6 +42,9 @@ class KnowledgeChunk(Base):
     """A chunk from a knowledge source, indexed for retrieval."""
 
     __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        Index('ix_knowledge_chunks_source_domain', 'source_id', 'domain'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     source_id: Mapped[str] = mapped_column(String(36), ForeignKey("knowledge_sources.id"), nullable=False)
@@ -53,7 +59,7 @@ class KnowledgeChunk(Base):
     # Vector embedding id (external reference in vector store)
     vector_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # For structured/KV data: key for fast lookup
-    entity_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    entity_key: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     # Relevance score cache
     cached_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     domain: Mapped[str] = mapped_column(String(64), default="default")

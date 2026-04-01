@@ -40,6 +40,7 @@ class AgentOut(BaseModel):
     llm_config_id: str | None
     response_config: Any
     risk_config: Any
+    skill_routing_mode: str = "conversational"
     tenant_id: str
     enabled: bool
     version: int

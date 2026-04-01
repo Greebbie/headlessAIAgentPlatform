@@ -10,8 +10,9 @@ from server.db import get_db
 from server.models.agent_skill import AgentSkill
 from server.models.skill import Skill
 from server.schemas.skill import AgentSkillCreate, AgentSkillOut
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/{agent_id}/skills", response_model=list[AgentSkillOut])

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from server.middleware.auth import get_current_user
 from server.performance_presets import PRESETS
 from server.runtime_config import runtime_config
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 class ApplyPresetRequest(BaseModel):
@@ -56,3 +57,10 @@ async def update_config(body: UpdateConfigRequest):
     runtime_config.update(body.config)
     runtime_config.set("active_preset", None)
     return {"message": "Config updated", "config": runtime_config.all()}
+
+
+@router.get("/circuit-breaker/status")
+async def circuit_breaker_status():
+    """Get status of all circuit breakers."""
+    from server.engine.circuit_breaker import circuit_breaker
+    return {"circuits": circuit_breaker.get_all_status()}

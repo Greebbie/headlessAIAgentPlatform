@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, JSON, Float
+from sqlalchemy import String, Text, DateTime, JSON, Float, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from server.db import Base
@@ -15,17 +15,20 @@ class AuditTrace(Base):
     """A single trace record capturing one event in the pipeline."""
 
     __tablename__ = "audit_traces"
+    __table_args__ = (
+        Index('ix_audit_traces_agent_timestamp', 'agent_id', 'timestamp'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     # Correlation id for end-to-end tracking
     trace_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
-    agent_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     tenant_id: Mapped[str] = mapped_column(String(36), default="default")
 
     # Event classification
     event_type: Mapped[str] = mapped_column(
-        String(32), nullable=False
+        String(32), nullable=False, index=True
     )  # user_input | intent | retrieval | llm_call | tool_call | workflow_step | response | escalation | error
 
     # Event data (flexible JSON)
@@ -44,4 +47,4 @@ class AuditTrace(Base):
 
     # Timing
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

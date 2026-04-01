@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.models.tool import ToolDefinition
 from server.engine.audit_logger import AuditLogger
+from server.engine.circuit_breaker import circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,11 @@ class ToolGateway:
         if not tool.endpoint:
             raise ToolInvocationError(tool.name, "No endpoint configured for HTTP tool", recoverable=False)
 
+        # Circuit breaker check
+        service_name = f"tool:{tool.endpoint}"
+        if not circuit_breaker.can_execute(service_name):
+            raise ToolInvocationError(tool.name, f"Circuit breaker open for {tool.endpoint}", recoverable=True)
+
         headers = {"Content-Type": "application/json"}
 
         # Apply auth
@@ -171,24 +177,31 @@ class ToolGateway:
         # Bypass env proxy for loopback calls (avoids SOCKS5/HTTP proxy interfering)
         trust_env = not self._is_localhost(tool.endpoint)
 
-        async with httpx.AsyncClient(timeout=timeout, trust_env=trust_env) as client:
-            if tool.method.upper() == "GET":
-                resp = await client.get(tool.endpoint, params=input_data, headers=headers)
-            elif tool.method.upper() == "POST":
-                resp = await client.post(tool.endpoint, json=input_data, headers=headers)
-            elif tool.method.upper() == "PUT":
-                resp = await client.put(tool.endpoint, json=input_data, headers=headers)
-            elif tool.method.upper() == "DELETE":
-                resp = await client.delete(tool.endpoint, params=input_data, headers=headers)
-            else:
-                resp = await client.post(tool.endpoint, json=input_data, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=trust_env) as client:
+                if tool.method.upper() == "GET":
+                    resp = await client.get(tool.endpoint, params=input_data, headers=headers)
+                elif tool.method.upper() == "POST":
+                    resp = await client.post(tool.endpoint, json=input_data, headers=headers)
+                elif tool.method.upper() == "PUT":
+                    resp = await client.put(tool.endpoint, json=input_data, headers=headers)
+                elif tool.method.upper() == "DELETE":
+                    resp = await client.delete(tool.endpoint, params=input_data, headers=headers)
+                else:
+                    resp = await client.post(tool.endpoint, json=input_data, headers=headers)
 
-            resp.raise_for_status()
+                resp.raise_for_status()
+                circuit_breaker.record_success(service_name)
 
-            try:
-                return resp.json()
-            except Exception:
-                return {"raw": resp.text}
+                try:
+                    return resp.json()
+                except Exception:
+                    return {"raw": resp.text}
+        except ToolInvocationError:
+            raise
+        except Exception as e:
+            circuit_breaker.record_failure(service_name)
+            raise ToolInvocationError(tool.name, str(e), recoverable=True) from e
 
     async def test_connectivity(self, tool_id: str) -> dict[str, Any]:
         """Test if a tool endpoint is reachable."""

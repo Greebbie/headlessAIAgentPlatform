@@ -14,8 +14,9 @@ from server.schemas.knowledge import (
     RetrievalRequest, RetrievalResponse,
 )
 from server.engine.knowledge_retriever import KnowledgeRetriever
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 # ── Knowledge Sources ────────────────────────────────────────────

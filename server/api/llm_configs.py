@@ -12,11 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
+from server.middleware.auth import get_current_user
 from server.models.llm_config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 # ── Pydantic Schemas ────────────────────────────────
 
@@ -128,11 +129,20 @@ PROVIDER_TEMPLATES: dict[str, dict[str, Any]] = {
     "vllm": {
         "provider": "openai_compatible",
         "base_url": "http://localhost:8080/v1",
-        "model": "MiniMaxAI/MiniMax-M1-80k",
+        "model": "Qwen/Qwen2.5-72B-Instruct",
         "temperature": 0.3,
         "top_p": 0.95,
         "max_tokens": 4096,
         "timeout_ms": 120000,
+    },
+    "minimax": {
+        "provider": "openai_compatible",
+        "base_url": "https://api.minimax.chat/v1",
+        "model": "MiniMax-M2.7",
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_tokens": 2048,
+        "timeout_ms": 60000,
     },
 }
 

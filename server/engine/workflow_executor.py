@@ -116,6 +116,20 @@ class WorkflowExecutor:
         step = steps[current_step_index]
         collected = dict(session.collected_data or {})
 
+        # Save step snapshot for potential rollback
+        state_snap = session.workflow_state or {}
+        snapshots = list(state_snap.get("snapshots", []))
+        snapshots.append({
+            "step_index": current_step_index,
+            "collected_data": dict(collected),
+        })
+        # Keep only last 5 snapshots to avoid unbounded growth
+        if len(snapshots) > 5:
+            snapshots = snapshots[-5:]
+        state_snap["snapshots"] = snapshots
+        session.workflow_state = state_snap
+        flag_modified(session, "workflow_state")
+
         # ── Handle step by type ──────────────────────────────────
         if step.step_type == "collect":
             return await self._handle_collect(step, steps, current_step_index, user_input, form_data, collected, session, _depth)
@@ -272,8 +286,8 @@ class WorkflowExecutor:
                     errors.append(f"字段 {field_name} 格式不正确")
 
         if errors:
-            if step.on_failure == "rollback" and step.fallback_step_id:
-                return WorkflowStepResult(status="rollback", message="校验失败，返回上一步")
+            if step.on_failure == "rollback":
+                return self._perform_rollback(session, steps, current_step_index=idx)
             return WorkflowStepResult(
                 status="waiting_input",
                 message="校验失败:\n" + "\n".join(f"- {e}" for e in errors),
@@ -331,6 +345,8 @@ class WorkflowExecutor:
                     message=f"工具调用失败，已转人工处理。原因: {e}",
                     escalated=True,
                 )
+            elif step.on_failure == "rollback":
+                return self._perform_rollback(session, steps, current_step_index=idx)
             else:
                 return WorkflowStepResult(
                     status="error",
@@ -340,14 +356,23 @@ class WorkflowExecutor:
 
     async def _handle_confirm(self, step, steps, idx, user_input, collected, session, _depth: int = 0) -> WorkflowStepResult:
         """Ask user to confirm before proceeding."""
-        positive = {"确认", "是", "是的", "确定", "好", "好的", "对", "y", "yes", "ok"}
-        if user_input.strip().lower() in positive:
+        text = user_input.strip().lower()
+
+        # Check for negative/cancel keywords first (contains match)
+        negative = {"取消", "不", "不是", "不对", "不行", "重新", "修改", "n", "no", "cancel"}
+        if any(kw in text for kw in negative):
+            # Roll back to previous collect step
+            return self._perform_rollback(session, steps, current_step_index=idx)
+
+        # Check for positive/confirm keywords (contains match, not exact)
+        positive = {"确认", "确定", "是", "好", "对", "行", "可以", "没问题", "正确", "y", "yes", "ok", "sure", "confirm"}
+        if any(kw in text for kw in positive):
             return await self._advance(steps, idx, session, _depth)
 
-        # Show confirmation prompt
+        # No clear intent — re-prompt
         return WorkflowStepResult(
             status="waiting_input",
-            message=step.prompt_template or "请确认以上信息是否正确？(确认/取消)",
+            message=step.prompt_template or '请确认以上信息是否正确？（回复"确认"继续，或"取消"修改）',
             card=self._make_card(step, steps, idx),
         )
 
@@ -420,8 +445,28 @@ class WorkflowExecutor:
         )
 
     async def _advance(self, steps, current_idx, session, _depth: int = 0) -> WorkflowStepResult:
-        """Move to the next step."""
-        next_idx = current_idx + 1
+        """Move to the next step, evaluating conditional branching rules if present."""
+        current_step = steps[current_idx]
+        next_idx = current_idx + 1  # default: linear progression
+
+        # Evaluate conditional branching rules
+        if current_step.next_step_rules:
+            from server.engine.rule_evaluator import evaluate_rules
+            collected = dict(session.collected_data or {})
+            rules = current_step.next_step_rules
+            # Handle both list and dict-wrapped formats
+            if isinstance(rules, dict):
+                rules = rules.get("rules", [])
+            if isinstance(rules, list):
+                goto = evaluate_rules(rules, collected)
+                if goto is not None:
+                    resolved = self._resolve_step_target(steps, goto)
+                    if resolved is not None:
+                        next_idx = resolved
+                        logger.info(
+                            "Workflow branching: step '%s' -> '%s' (index %d)",
+                            current_step.name, goto, next_idx,
+                        )
 
         if next_idx >= len(steps):
             session.workflow_state = {
@@ -474,6 +519,77 @@ class WorkflowExecutor:
             status="in_progress",
             message=next_step.prompt_template or f"请继续: {next_step.name}",
             card=self._make_card(next_step, steps, next_idx),
+        )
+
+    @staticmethod
+    def _resolve_step_target(steps: list, target: str) -> int | None:
+        """Resolve a goto_step target to a step index.
+
+        Target can be:
+        - A step name (string match)
+        - A step order number (as string or int)
+        """
+        # Try matching by step name first
+        for i, step in enumerate(steps):
+            if step.name == target:
+                return i
+
+        # Try matching by order number
+        try:
+            target_order = int(target)
+            for i, step in enumerate(steps):
+                if step.order == target_order:
+                    return i
+        except (ValueError, TypeError):
+            pass
+
+        logger.warning("Could not resolve step target '%s'", target)
+        return None
+
+    def _perform_rollback(
+        self, session: ConversationSession, steps: list, current_step_index: int,
+    ) -> WorkflowStepResult:
+        """Roll back to the previous interactive step by restoring its snapshot."""
+        state = dict(session.workflow_state or {})
+        snapshots = list(state.get("snapshots", []))
+
+        if not snapshots:
+            return WorkflowStepResult(
+                status="error",
+                message="无法回退：没有可用的步骤快照。",
+            )
+
+        # Pop the last snapshot (which is the current step's snapshot)
+        snapshots.pop()
+
+        if not snapshots:
+            # No previous snapshot — go back to step 0
+            target_idx = 0
+            restored_data: dict[str, Any] = {}
+        else:
+            # Restore the previous snapshot
+            prev = snapshots[-1]
+            target_idx = prev["step_index"]
+            restored_data = dict(prev.get("collected_data", {}))
+
+        # Update session state
+        state["current_step_index"] = target_idx
+        state["snapshots"] = snapshots
+        session.workflow_state = state
+        session.collected_data = restored_data
+        flag_modified(session, "workflow_state")
+        flag_modified(session, "collected_data")
+
+        target_step = steps[target_idx] if target_idx < len(steps) else steps[0]
+        logger.info(
+            "Workflow rollback: step %d -> step %d ('%s')",
+            current_step_index, target_idx, target_step.name,
+        )
+
+        return WorkflowStepResult(
+            status="waiting_input",
+            message=f"已回退到步骤: {target_step.name}。请重新填写。",
+            card=self._make_card(target_step, steps, target_idx),
         )
 
     def _make_card(

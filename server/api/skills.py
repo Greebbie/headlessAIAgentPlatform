@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.db import get_db
 from server.models.skill import Skill
 from server.schemas.skill import SkillCreate, SkillUpdate, SkillOut
+from server.middleware.auth import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 VALID_SKILL_TYPES = {"workflow", "tool_call", "knowledge_qa", "delegate", "composite"}
 

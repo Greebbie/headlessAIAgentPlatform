@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from server.config import settings
+from server.engine.circuit_breaker import circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -197,14 +198,29 @@ class LLMAdapter:
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": False,
         }
-        async with self._make_client() as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
+
+        service_name = f"llm:{self.base_url}"
+        if not circuit_breaker.can_execute(service_name):
+            from server.exceptions import LLMError
+            raise LLMError(
+                f"Circuit breaker open for {self.base_url}",
+                provider=getattr(self, "provider", ""),
+                model=model,
             )
-            resp.raise_for_status()
-            data = resp.json()
+
+        try:
+            async with self._make_client() as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            circuit_breaker.record_success(service_name)
+        except Exception:
+            circuit_breaker.record_failure(service_name)
+            raise
 
         choice = data["choices"][0]
         message = choice["message"]
@@ -268,14 +284,29 @@ class LLMAdapter:
             "tools": formatted_tools,
             "stream": False,
         }
-        async with self._make_client() as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
+
+        service_name = f"llm:{self.base_url}"
+        if not circuit_breaker.can_execute(service_name):
+            from server.exceptions import LLMError
+            raise LLMError(
+                f"Circuit breaker open for {self.base_url}",
+                provider=getattr(self, "provider", ""),
+                model=model,
             )
-            resp.raise_for_status()
-            data = resp.json()
+
+        try:
+            async with self._make_client() as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            circuit_breaker.record_success(service_name)
+        except Exception:
+            circuit_breaker.record_failure(service_name)
+            raise
 
         choice = data["choices"][0]
         message = choice["message"]

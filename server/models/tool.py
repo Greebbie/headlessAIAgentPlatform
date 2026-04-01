@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, Boolean, Integer, DateTime, JSON
+from sqlalchemy import String, Text, Boolean, Integer, DateTime, JSON, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from server.db import Base
@@ -15,6 +15,10 @@ class ToolDefinition(Base):
     """A registered tool (local API, internal service, 3rd-party, etc.)."""
 
     __tablename__ = "tool_definitions"
+    __table_args__ = (
+        CheckConstraint('max_retries >= 0', name='ck_tools_max_retries'),
+        CheckConstraint('timeout_ms > 0', name='ck_tools_timeout_ms'),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)

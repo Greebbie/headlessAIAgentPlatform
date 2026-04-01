@@ -11,10 +11,20 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import get_db
+from server.middleware.auth import get_current_user
+from server.exceptions import (
+    HlABError,
+    LLMError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    RetrievalError,
+    ToolInvocationError,
+    WorkflowError,
+)
 from server.schemas.invoke import InvokeRequest, InvokeResponse
 from server.engine.agent_runtime import AgentRuntime
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 
@@ -78,27 +88,61 @@ async def invoke_stream(req: InvokeRequest, db: AsyncSession = Depends(get_db)):
                 "metadata": response.metadata,
             }))
 
-        except Exception as exc:
-            logger.error(f"SSE pipeline error: {exc}", exc_info=True)
-            error_str = str(exc).lower()
-
-            if "timeout" in error_str or "timed out" in error_str:
-                error_type = "timeout"
-                error_msg = "请求超时，模型处理较慢，请稍后重试。"
-            elif "connection" in error_str or "connect" in error_str:
-                error_type = "connection"
-                error_msg = "无法连接到语言模型服务，请检查服务状态后重试。"
-            elif "rate" in error_str or "429" in error_str:
-                error_type = "rate_limit"
-                error_msg = "请求频率过高，请稍后重试。"
-            else:
-                error_type = "internal"
-                error_msg = "系统暂时无法响应，请稍后重试或联系人工客服。"
-
+        except LLMTimeoutError as exc:
+            logger.error("SSE pipeline LLM timeout: %s", exc, exc_info=True)
             await queue.put(_sse_event("error", {
                 "detail": str(exc),
-                "error_type": error_type,
-                "error_msg": error_msg,
+                "error_type": "timeout",
+                "error_msg": "请求超时，模型处理较慢，请稍后重试。",
+            }))
+        except LLMRateLimitError as exc:
+            logger.error("SSE pipeline LLM rate limit: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "rate_limit",
+                "error_msg": "请求频率过高，请稍后重试。",
+            }))
+        except LLMError as exc:
+            logger.error("SSE pipeline LLM error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "llm_error",
+                "error_msg": "语言模型服务异常，请检查配置后重试。",
+            }))
+        except RetrievalError as exc:
+            logger.error("SSE pipeline retrieval error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "retrieval",
+                "error_msg": "知识检索服务异常，请稍后重试。",
+            }))
+        except WorkflowError as exc:
+            logger.error("SSE pipeline workflow error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "workflow",
+                "error_msg": "流程执行异常，请检查流程配置。",
+            }))
+        except ToolInvocationError as exc:
+            logger.error("SSE pipeline tool error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "tool",
+                "error_msg": "工具调用失败，请检查工具配置。",
+            }))
+        except HlABError as exc:
+            logger.error("SSE pipeline HlAB error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "platform",
+                "error_msg": exc.message,
+            }))
+        except Exception as exc:
+            logger.error("SSE pipeline unexpected error: %s", exc, exc_info=True)
+            await queue.put(_sse_event("error", {
+                "detail": str(exc),
+                "error_type": "internal",
+                "error_msg": "系统暂时无法响应，请稍后重试或联系人工客服。",
             }))
         finally:
             # Sentinel: signals the generator to stop

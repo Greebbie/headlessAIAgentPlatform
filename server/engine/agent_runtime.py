@@ -247,12 +247,13 @@ class AgentRuntime:
         if is_chitchat:
             audit.log("chitchat_detected", event_data={"message": req.message})
 
+        # ── Load all skills ONCE for this request (avoid 3x DB queries) ──
+        all_skills = await self._load_agent_skills(agent.id)
+
         # ── Check if user intends a workflow action ──
-        # If the message matches workflow skill keywords, skip pre-retrieval
-        # so the LLM isn't distracted by knowledge data and uses function calling
         has_action_intent = False
         if not is_chitchat:
-            has_action_intent = await self._has_workflow_intent(agent.id, msg_lower)
+            has_action_intent = self._has_workflow_intent_from_skills(all_skills, msg_lower)
             if has_action_intent:
                 audit.log("action_intent_detected", event_data={
                     "message": req.message,
@@ -263,7 +264,7 @@ class AgentRuntime:
         pre_context = ""
         pre_citations: list[Citation] = []
         if not has_action_intent and not is_chitchat:
-            knowledge_skills = await self._get_knowledge_skills(agent.id)
+            knowledge_skills = [s for s in all_skills if s.skill_type == "knowledge_qa"]
             if knowledge_skills:
                 # Use rewritten query for better retrieval
                 history = await self._get_history(session.id, limit=6)
@@ -278,10 +279,11 @@ class AgentRuntime:
                     retrieval_query, knowledge_skills, audit,
                 )
 
-        # ── Build skill tools ──
+        # ── Build skill tools (using pre-loaded skills) ──
         tool_defs, handler_map = await self._build_skill_tools(
             agent, session, audit,
             pre_retrieved=bool(pre_context),
+            preloaded_skills=all_skills,
         )
 
         audit.log("conversational_init", event_data={
@@ -301,6 +303,15 @@ class AgentRuntime:
             system_msg = CONVERSATIONAL_SYSTEM_PROMPT.format(persona=persona)
 
         messages: list[LLMMessage] = [LLMMessage(role="system", content=system_msg)]
+
+        # Prepend context messages from parent agent delegation (if any)
+        if req.context_messages:
+            for ctx_msg in req.context_messages:
+                messages.append(LLMMessage(
+                    role=ctx_msg.get("role", "user"),
+                    content=ctx_msg.get("content", ""),
+                ))
+
         for msg in history:
             messages.append(LLMMessage(role=msg.role, content=msg.content))
 
@@ -474,6 +485,7 @@ class AgentRuntime:
     async def _build_skill_tools(
         self, agent: Agent, session: ConversationSession, audit: AuditLogger,
         pre_retrieved: bool = False,
+        preloaded_skills: list | None = None,
     ) -> tuple[list[dict], dict[str, Callable]]:
         """Convert agent's bound skills to OpenAI function defs + handler map.
 
@@ -485,7 +497,7 @@ class AgentRuntime:
           composite    → recurse into sub-skills
         """
 
-        skills = await self._load_agent_skills(agent.id)
+        skills = preloaded_skills if preloaded_skills is not None else await self._load_agent_skills(agent.id)
         if not skills:
             return [], {}
 
@@ -843,10 +855,19 @@ class AgentRuntime:
             chain.append(source_agent.id)
             session.delegation_chain = chain
 
+            # Carry last N messages as context for the delegated agent
+            context_limit = 5
+            history = await self._get_history(session.id, limit=context_limit)
+            context_msgs = [
+                {"role": msg.role, "content": msg.content}
+                for msg in history  # already oldest-first from _get_history
+            ]
+
             audit.log("delegation", event_data={
                 "from_agent": source_agent.id,
                 "to_agent": target_agent_id,
                 "depth": len(chain),
+                "context_messages_count": len(context_msgs),
             })
 
             delegated_req = InvokeRequest(
@@ -854,6 +875,9 @@ class AgentRuntime:
                 session_id=None,
                 user_id="delegated",
                 message=user_message,
+                context_messages=context_msgs if context_msgs else None,
+                parent_session_id=session.id,
+                shared_context=dict(session.shared_context or {}),
             )
 
             runtime = AgentRuntime(self.db)
@@ -882,6 +906,25 @@ class AgentRuntime:
         """Get knowledge_qa skills bound to an agent."""
         skills = await self._load_agent_skills(agent_id)
         return [s for s in skills if s.skill_type == "knowledge_qa"]
+
+    def _has_workflow_intent_from_skills(self, skills: list, msg_lower: str) -> bool:
+        """Check workflow intent using pre-loaded skills (no DB call)."""
+        _ACTION_KEYWORDS = [
+            "报修", "维修", "修一下", "修理", "我要办", "帮我办",
+            "我要申请", "我想申请", "提交", "办理", "发起",
+            "做工单", "提工单", "下单", "开工单",
+        ]
+        for kw in _ACTION_KEYWORDS:
+            if kw in msg_lower:
+                return True
+        for skill in skills:
+            if skill.skill_type != "workflow":
+                continue
+            trigger_kws = (skill.trigger_config or {}).get("keywords", [])
+            for kw in trigger_kws:
+                if kw in msg_lower:
+                    return True
+        return False
 
     async def _has_workflow_intent(self, agent_id: str, msg_lower: str) -> bool:
         """Check if user message matches workflow skill trigger keywords.
@@ -1156,6 +1199,11 @@ class AgentRuntime:
             user_id=req.user_id,
             tenant_id=agent.tenant_id,
         )
+        # Propagate delegation context from parent session
+        if req.parent_session_id:
+            session.parent_session_id = req.parent_session_id
+        if req.shared_context:
+            session.shared_context = dict(req.shared_context)
         self.db.add(session)
         await self.db.flush()
         return session

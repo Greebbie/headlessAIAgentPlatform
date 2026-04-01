@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,8 +12,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from server.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Ensure data directory exists for SQLite
 os.makedirs("./data", exist_ok=True)
@@ -49,8 +54,9 @@ async def lifespan(app: FastAPI):
             await conn.execute(text(
                 "ALTER TABLE agents ADD COLUMN llm_config_id VARCHAR(36) REFERENCES llm_configs(id) ON DELETE SET NULL"
             ))
+            logger.info("Migration: added llm_config_id column to agents table")
         except Exception:
-            pass  # Column already exists
+            pass  # Column already exists — expected on subsequent startups
     yield
     await engine.dispose()
 
@@ -69,6 +75,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Inject X-Request-ID into every request/response for end-to-end tracing."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        # Store on request state so handlers can access it
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+app.add_middleware(RequestIDMiddleware)
+
 # ── Register routers ────────────────────────────────
 from server.api.invoke import router as invoke_router
 from server.api.agents import router as agents_router
@@ -84,6 +105,7 @@ from server.api.skills import router as skills_router
 from server.api.agent_skills import router as agent_skills_router
 from server.api.agent_connections import router as agent_connections_router
 from server.api.agent_capabilities import router as agent_capabilities_router
+from server.api.auth import router as auth_router
 
 prefix = settings.api_prefix
 
@@ -101,11 +123,50 @@ app.include_router(skills_router, prefix=prefix + "/skills", tags=["skills"])
 app.include_router(agent_skills_router, prefix=prefix + "/agents", tags=["agent-skills"])
 app.include_router(agent_connections_router, prefix=prefix + "/agent-connections", tags=["agent-connections"])
 app.include_router(agent_capabilities_router, prefix=prefix + "/agents", tags=["agent-capabilities"])
+app.include_router(auth_router, prefix=prefix + "/auth", tags=["auth"])
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    """System health check with component status."""
+    status = {"status": "ok", "version": "0.1.0", "components": {}}
+
+    # Check database
+    try:
+        from server.db import engine
+        from sqlalchemy import text
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        status["components"]["database"] = {"status": "healthy"}
+    except Exception as e:
+        status["components"]["database"] = {"status": "unhealthy", "error": str(e)}
+        status["status"] = "degraded"
+
+    # Check vector store
+    try:
+        from server.engine.vector_store import get_vector_store
+        vs = get_vector_store()
+        if vs:
+            status["components"]["vector_store"] = {"status": "healthy", "count": vs.count()}
+        else:
+            status["components"]["vector_store"] = {"status": "not_initialized"}
+    except Exception as e:
+        status["components"]["vector_store"] = {"status": "unhealthy", "error": str(e)}
+
+    # Check circuit breakers
+    try:
+        from server.engine.circuit_breaker import circuit_breaker
+        cb_status = circuit_breaker.get_all_status()
+        open_circuits = [c for c in cb_status if c.get("state") == "open"]
+        status["components"]["circuit_breakers"] = {
+            "status": "degraded" if open_circuits else "healthy",
+            "total": len(cb_status),
+            "open": len(open_circuits),
+        }
+    except Exception:
+        pass
+
+    return status
 
 
 # ── Serve frontend SPA (production) ─────────────────

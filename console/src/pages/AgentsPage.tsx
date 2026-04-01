@@ -10,6 +10,7 @@ import {
   agentApi, agentCapabilitiesApi, agentConnectionApi,
   workflowApi, toolApi, knowledgeApi, llmConfigApi,
 } from '../api';
+import { AgentWizard } from '../components/agent';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -24,6 +25,7 @@ const emptyCaps = (): Capabilities => ({ knowledge: [], workflows: [], tools: []
 export default function AgentsPage() {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('basic');
@@ -302,7 +304,7 @@ export default function AgentsPage() {
       title: 'Actions', key: 'actions', render: (_: any, record: any) => (
         <Space>
           <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(record)}>Edit</Button>
-          <Popconfirm title="Delete this Agent and its auto-managed skills?" onConfirm={() => handleDelete(record.id)} okText="Confirm" cancelText="Cancel">
+          <Popconfirm title="确定删除此智能体及其自动管理的技能？" onConfirm={() => handleDelete(record.id)} okText="Confirm" cancelText="Cancel">
             <Button icon={<DeleteOutlined />} size="small" danger>Delete</Button>
           </Popconfirm>
         </Space>
@@ -328,7 +330,7 @@ export default function AgentsPage() {
     {
       title: 'Actions', key: 'actions',
       render: (_: any, record: any) => (
-        <Popconfirm title="Remove connection?" onConfirm={() => handleDeleteConnection(record.id)} okText="Confirm" cancelText="Cancel">
+        <Popconfirm title="确定移除此连接？" onConfirm={() => handleDeleteConnection(record.id)} okText="Confirm" cancelText="Cancel">
           <Button icon={<DeleteOutlined />} size="small" danger>Remove</Button>
         </Popconfirm>
       ),
@@ -378,12 +380,12 @@ export default function AgentsPage() {
       {/* Knowledge QA */}
       <Card
         size="small"
-        title="Knowledge QA"
+        title="知识问答"
         extra={<Button size="small" icon={<PlusOutlined />} onClick={addKnowledge}>Add</Button>}
         style={{ marginBottom: 16 }}
       >
         {capabilities.knowledge.length === 0 && (
-          <Text type="secondary">No knowledge bindings. Click Add to bind a knowledge domain.</Text>
+          <Text type="secondary">暂无知识绑定，点击"添加"绑定知识域。</Text>
         )}
         {capabilities.knowledge.map((k, idx) => (
           <div key={idx} style={{ marginBottom: 12, padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
@@ -391,7 +393,7 @@ export default function AgentsPage() {
               <Select
                 mode="multiple"
                 style={{ flex: 1, minWidth: 200 }}
-                placeholder="Knowledge sources"
+                placeholder="选择知识源"
                 value={k.source_ids}
                 onChange={v => {
                   updateKnowledge(idx, 'source_ids', v);
@@ -408,7 +410,7 @@ export default function AgentsPage() {
             </div>
             <TextArea
               rows={2}
-              placeholder="Describe when to use this knowledge tool (LLM uses this description to decide when to call it)"
+              placeholder="描述何时使用此知识工具（LLM根据描述判断何时调用）"
               value={k.description}
               onChange={e => updateKnowledge(idx, 'description', e.target.value)}
             />
@@ -419,19 +421,19 @@ export default function AgentsPage() {
       {/* Workflows */}
       <Card
         size="small"
-        title="Workflows"
+        title="工作流"
         extra={<Button size="small" icon={<PlusOutlined />} onClick={addWorkflow}>Add</Button>}
         style={{ marginBottom: 16 }}
       >
         {capabilities.workflows.length === 0 && (
-          <Text type="secondary">No workflow bindings. Click Add to bind a workflow.</Text>
+          <Text type="secondary">暂无工作流绑定，点击"添加"绑定工作流。</Text>
         )}
         {capabilities.workflows.map((w, idx) => (
           <div key={idx} style={{ marginBottom: 12, padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
               <Select
                 style={{ flex: 1 }}
-                placeholder="Select workflow"
+                placeholder="选择工作流"
                 value={w.workflow_id || undefined}
                 onChange={v => updateWorkflow(idx, 'workflow_id', v)}
                 options={workflows.map((wf: any) => ({ value: wf.id, label: `${wf.name}` }))}
@@ -442,7 +444,7 @@ export default function AgentsPage() {
             </div>
             <TextArea
               rows={2}
-              placeholder="Describe when to use this workflow (LLM uses this description to decide when to call it)"
+              placeholder="描述何时使用此工作流（LLM根据描述判断何时调用）"
               value={w.description}
               onChange={e => updateWorkflow(idx, 'description', e.target.value)}
             />
@@ -453,12 +455,12 @@ export default function AgentsPage() {
       {/* Tool Calling */}
       <Card
         size="small"
-        title="Tool Calling"
+        title="工具调用"
         extra={<Button size="small" icon={<PlusOutlined />} onClick={addTool}>Add</Button>}
         style={{ marginBottom: 16 }}
       >
         {capabilities.tools.length === 0 && (
-          <Text type="secondary">No tool bindings. Click Add to bind tools.</Text>
+          <Text type="secondary">暂无工具绑定，点击"添加"绑定工具。</Text>
         )}
         {capabilities.tools.map((t, idx) => (
           <div key={idx} style={{ marginBottom: 12, padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
@@ -566,7 +568,7 @@ export default function AgentsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>Agent Management</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setWizardOpen(true)}>
           Create Agent
         </Button>
       </div>
@@ -591,6 +593,12 @@ export default function AgentsPage() {
           ]}
         />
       </Modal>
+
+      <AgentWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        onCreated={loadAgents}
+      />
     </div>
   );
 }

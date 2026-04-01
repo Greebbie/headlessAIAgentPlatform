@@ -52,3 +52,5 @@ static/
 htmlcov/
 .coverage
 .pytest_cache/
+/.playwright-mcp
+/.superpowers

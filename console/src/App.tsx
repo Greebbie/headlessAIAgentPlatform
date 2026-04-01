@@ -1,5 +1,6 @@
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu } from 'antd';
+import { Layout, Menu, Button } from 'antd';
+import { useTranslation } from 'react-i18next';
 import {
   RobotOutlined,
   ApartmentOutlined,
@@ -11,6 +12,8 @@ import {
   SettingOutlined,
   ThunderboltOutlined,
   AppstoreOutlined,
+  GlobalOutlined,
+  HeartOutlined,
 } from '@ant-design/icons';
 
 import AgentsPage from './pages/AgentsPage';
@@ -23,25 +26,34 @@ import PlaygroundPage from './pages/PlaygroundPage';
 import LLMConfigsPage from './pages/LLMConfigsPage';
 import SettingsPage from './pages/SettingsPage';
 import SkillsPage from './pages/SkillsPage';
+import HealthPage from './pages/HealthPage';
 
 const { Header, Sider, Content } = Layout;
-
-const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
-  { key: '/playground', icon: <ExperimentOutlined />, label: '测试台' },
-  { key: '/agents', icon: <RobotOutlined />, label: 'Agent 管理' },
-  { key: '/skills', icon: <AppstoreOutlined />, label: '技能管理' },
-  { key: '/workflows', icon: <ApartmentOutlined />, label: '流程编排' },
-  { key: '/knowledge', icon: <BookOutlined />, label: '知识管理' },
-  { key: '/tools', icon: <ApiOutlined />, label: '工具管理' },
-  { key: '/llm-configs', icon: <ThunderboltOutlined />, label: 'LLM 配置' },
-  { key: '/audit', icon: <AuditOutlined />, label: '审计回放' },
-  { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-];
 
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { t, i18n } = useTranslation();
+
+  const toggleLang = () => {
+    const next = i18n.language === 'zh' ? 'en' : 'zh';
+    i18n.changeLanguage(next);
+    localStorage.setItem('hlab-lang', next);
+  };
+
+  const menuItems = [
+    { key: '/', icon: <DashboardOutlined />, label: t('nav.dashboard') },
+    { key: '/playground', icon: <ExperimentOutlined />, label: t('nav.playground') },
+    { key: '/agents', icon: <RobotOutlined />, label: t('nav.agents') },
+    { key: '/skills', icon: <AppstoreOutlined />, label: t('nav.skills') },
+    { key: '/workflows', icon: <ApartmentOutlined />, label: t('nav.workflows') },
+    { key: '/knowledge', icon: <BookOutlined />, label: t('nav.knowledge') },
+    { key: '/tools', icon: <ApiOutlined />, label: t('nav.tools') },
+    { key: '/llm-configs', icon: <ThunderboltOutlined />, label: t('nav.llmConfigs') },
+    { key: '/audit', icon: <AuditOutlined />, label: t('nav.audit') },
+    { key: '/settings', icon: <SettingOutlined />, label: t('nav.settings') },
+    { key: '/health', icon: <HeartOutlined />, label: t('nav.health') },
+  ];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -58,8 +70,15 @@ export default function App() {
         />
       </Sider>
       <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', fontSize: 16, fontWeight: 500 }}>
-          Headless AI Agent Builder - 可视化控制台
+        <Header style={{ background: '#fff', padding: '0 24px', fontSize: 16, fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Headless AI Agent Builder</span>
+          <Button
+            type="text"
+            icon={<GlobalOutlined />}
+            onClick={toggleLang}
+          >
+            {i18n.language === 'zh' ? 'EN' : '中文'}
+          </Button>
         </Header>
         <Content style={{ margin: 24, padding: 24, background: '#fff', borderRadius: 8 }}>
           <Routes>
@@ -73,6 +92,7 @@ export default function App() {
             <Route path="/llm-configs" element={<LLMConfigsPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/health" element={<HealthPage />} />
           </Routes>
         </Content>
       </Layout>
