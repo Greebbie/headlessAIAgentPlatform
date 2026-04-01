@@ -1,3 +1,5 @@
+[English](README_en.md) | **中文**
+
 # HlAB — Headless AI Agent Builder
 
 可私有部署的企业级 AI Agent 平台。通过 Web 控制台可视化创建和管理对话式智能体，支持知识库问答（RAG）、多步骤工作流、外部工具调用、多 Agent 协作。同时提供完整的 Headless REST API 和 SSE 流式接口，可集成到任何业务系统。

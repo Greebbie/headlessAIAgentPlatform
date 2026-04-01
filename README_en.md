@@ -1,3 +1,5 @@
+**English** | [中文](README.md)
+
 # HlAB — Headless AI Agent Builder
 
 A privately deployable AI Agent platform with a web management console. Visually create, configure, and run conversational AI agents — with knowledge base Q&A, multi-step workflows, external API tool calling, and multi-agent collaboration — while exposing a Headless API and SSE streaming interface for integration into any system.
